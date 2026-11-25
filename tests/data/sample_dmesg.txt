@@ -1,0 +1,40 @@
+[    0.000000] Linux version 6.12.11+deb13-amd64 (debian-kernel@lists.debian.org) (gcc-14, GNU ld) #1 SMP PREEMPT_DYNAMIC
+[    0.000000] Command line: BOOT_IMAGE=/vmlinuz-6.12.11+deb13-amd64 root=/dev/sda2 ro quiet
+[    0.345012] ACPI: Early table checksum verification disabled
+[    0.501234] ACPI Error: Needed type [Reference], found [Integer] (20230628/exresop-66)
+[    0.612345] PCI: Using host bridge windows from ACPI; if necessary, use "pci=nocrs"
+[    1.023456] i8042: probe of i8042 failed with error (-5)
+[    1.145678] input: Power Button as /devices/LNXSYSTM:00/input/input0
+[    2.345678] systemd[1]: Detected architecture x86-64.
+[    3.456789] usb usb1: New USB device found, idVendor=1d6b, idProduct=0002
+[    4.567890] EXT4-fs (sda2): mounted filesystem 12345678-1234-1234-1234-123456789abc r/w with ordered data mode.
+[    5.678901] amdgpu: Loading firmware version 0x00000000
+[    6.789012] [drm] amdgpu kernel modesetting enabled.
+[ 1234.567890] amdgpu 0000:03:00.0: amdgpu: ring gfx_0.0.0 timeout, info request on ring0
+[ 1234.568000] [drm:amdgpu_job_timedout [amdgpu]] *ERROR* ring gfx_0.0.0 timeout, but soft job recovered
+[ 1235.000123] amdgpu 0000:03:00.0: amdgpu: GPU reset(1) succeeded
+[ 2345.678901] chrome invoked oom-killer: gfp_mask=0x140cca(GFP_HIGHUSER_MOVABLE|__GFP_COMP), order=0, oom_score_adj=336
+[ 2345.678950] CPU: 3 UID: 1000 PID: 12345 Comm: chrome Tainted: G     U   OE   6.12.11+deb13-amd64
+[ 2345.679000] Out of memory: Killed process 12345 (chrome) total-vm:12345678kB, anon-rss:9876543kB, file-rss:12345kB, shmem-rss:0kB
+[ 2345.679050] oom_kill_process: 2418 callbacks suppressed
+[ 2345.700000] Memory cgroup out of memory: Killed process 12399 (java) total-vm:8765432kB, anon-rss:5432109kB
+[ 3456.789012] watchdog: BUG: soft lockup - CPU#2 stuck for 23s! [kworker/u16:2:567]
+[ 3456.789030] Modules linked in: amdgpu drm i915 nvme ext4
+[ 3456.789060] CPU: 2 UID: 0 PID: 567 Comm: kworker/u16:2 Tainted: G     U   OE   6.12.11+deb13-amd64
+[ 3456.789090] Hardware name: Custom Board/B860M, BIOS 1.20
+[ 3456.789120] Workqueue: writeback wb_workfn (flush-8:0)
+[ 3456.789150] RIP: 0010:ext4_writepages+0x1a2/0x4d0 [ext4]
+[ 3456.789180] Call Trace:
+[ 3456.789200]  <TASK>
+[ 3456.789220]  ? do_writepages+0xd5/0x1e0
+[ 3456.789240]  ? wb_workfn+0xa5/0x2f0
+[ 3456.789260]  </TASK>
+[ 3457.100000] INFO: task jbd2/sda2-8:234 blocked for more than 122 seconds.
+[ 3457.100050]       Not tainted 6.12.11+deb13-amd64 #1
+[ 3457.100100] "echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+[ 4567.890123] nvme nvme0: I/O 12 (QID 1) Q 0x0 timeout, reset controller
+[ 4568.123456] blk_update_request: critical medium error, dev nvme0n1, sector 12345678 op 0x0:(READ) flags 0x0 phys_seg 1 prio class 0
+[ 4568.200000] EXT4-fs error (device nvme0n1p1): ext4_lookup:1895: inode #2: comm find: deleted inode referenced: 123456
+[ 5678.901234] audit: type=1400 audit(1731400000.123:45): avc:  denied  { read } for  pid=999 comm="cat" name="secret" dev="sda2" ino=111
+[ 6789.012345] wlo1: limit rates at 120 MBit/s to save power
+[ 7000.123456] usb 1-2: USB disconnect, device number 3
