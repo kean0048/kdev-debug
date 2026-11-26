@@ -102,15 +102,27 @@ def _push(intervals: list, start: int, end: int, names: list[str]) -> None:
 
 def render_blocks(lines: list[str], blocks: list[Block], max_chars: int = 900_000) -> str:
     """Render as text with real line numbers; truncate by block order and note it if too long."""
-    parts: list[str] = []
-    total = 0
+    chunks = []
     for b in blocks:
         header = f"### Segment L{b.start}-{b.end} [{', '.join(b.names)}]"
         body = "\n".join(f"{n}: {lines[n - 1]}" for n in range(b.start, b.end + 1))
-        chunk = f"{header}\n{body}\n"
-        if total + len(chunk) > max_chars:
-            parts.append(f"\n... log too long; omitted the remaining {len(blocks) - len(parts)} segments ...")
-            break
-        parts.append(chunk)
-        total += len(chunk)
-    return "\n".join(parts)
+        chunks.append((header, body))
+    total = sum(len(h) + len(bd) + 2 for h, bd in chunks)
+    if total > max_chars and chunks:
+        # over budget: trim EVERY segment's head+tail rather than dropping the
+        # later ones — in chronological logs the newest events matter most
+        # (sashiko trims contiguous runs inside quotes, never whole items)
+        avg_line = max(1, total // max(1, sum(len(bd.splitlines()) for _, bd in chunks)))
+        keep = max(10, max_chars // max(1, len(chunks)) // avg_line)
+        slim = []
+        for h, bd in chunks:
+            ls = bd.splitlines()
+            if len(ls) > keep:
+                head = keep - keep // 2
+                ls = ls[:head] + [f"... {len(ls) - keep} lines omitted ..."] + ls[-(keep - head):]
+            slim.append((h, "\n".join(ls)))
+        chunks = slim
+    out = []
+    for h, bd in chunks:
+        out.append(f"{h}\n{bd}\n")
+    return "\n".join(out)

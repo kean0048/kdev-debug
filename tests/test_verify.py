@@ -45,3 +45,26 @@ def test_short_quote_requires_exact():
     r = _result([{"line": 1, "quote": "error"}])
     s = verify_result(r, LOG)
     assert s.passed == 0
+
+
+from dmesg_agent.verify import verify_result
+
+
+def test_line_drift_within_five_auto_corrects():
+    log = ["[ 1.0] alpha event", "[ 2.0] beta event", "[ 3.0] gamma event",
+           "[ 4.0] delta event", "[ 5.0] eps event", "[ 6.0] zeta event"]
+    result = {"findings": [{"title": "t", "evidence": [
+        {"line": 6, "quote": "beta event"}]}]}  # claimed 6, actually 2 → drift
+    s = verify_result(result, log)
+    assert s.passed == 1
+    assert result["findings"][0]["evidence"][0]["verified"] is True
+    assert result["findings"][0]["evidence"][0]["actual_line"] == 2
+    assert s.line_mismatch == 1
+
+
+def test_drift_and_fabrication_still_distinct():
+    log = ["[ 1.0] real line"]
+    result = {"findings": [{"title": "t", "evidence": [
+        {"line": 1, "quote": "totally invented"}]}]}
+    verify_result(result, log)
+    assert result["findings"][0]["evidence"][0]["verified"] is False

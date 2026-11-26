@@ -85,7 +85,8 @@ def run_analysis(client, bundle: RawBundle, blocks_text: str, prefetch_text: str
 
 def _concern_text(c: dict) -> str:
     return " ".join(str(c.get(k, "")) for k in
-                    ("title", "subsystem", "signal_reason", "hypothesis", "verification_question"))
+                    ("title", "subsystem", "signal_reason", "hypothesis",
+                     "verification_question", "concern_arguments", "dismissal_arguments"))
 
 
 def deep_dive(client, executor, result: dict, log_lines: list[str],

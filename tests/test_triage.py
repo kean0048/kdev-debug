@@ -52,3 +52,15 @@ def test_clean_log_falls_back_to_whole():
     assert len(blocks) == 1
     assert blocks[0].names == ["whole-log"]
     assert blocks[0].start == 1 and blocks[0].end == len(lines)
+
+
+def test_over_budget_keeps_all_segments_trimmed():
+    # one huge merged block (adjacent lockup lines); trimming must keep the
+    # tail (chronological recency matters), not drop it wholesale
+    lines = [f"[{i}.0] soft lockup - CPU#{i} stuck for 22s! work" for i in range(500)]
+    blocks = find_blocks(lines)
+    assert len(blocks) == 1 and blocks[0].end == 500
+    text = render_blocks(lines, blocks, max_chars=4_000)
+    assert "lines omitted" in text
+    assert "CPU#499" in text  # tail preserved
+    assert "CPU#0 " in text   # head preserved

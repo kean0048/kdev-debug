@@ -53,10 +53,12 @@ def verify_result(result: dict, log_lines: list[str]) -> VerifySummary:
             claimed = ev.get("line")
             found_at: int | None = None
 
-            # first check a ±1 window around the claimed line number
+            # first check a ±5 window around the claimed line number
+            # (sashiko-style drift tolerance: small local models frequently
+            # mis-count by a few lines; that is a line drift, not a mismatch)
             try:
                 c = int(claimed)
-                window = range(max(1, c - 1), min(len(norm_all), c + 1) + 1)
+                window = range(max(1, c - 5), min(len(norm_all), c + 5) + 1)
                 for n in window:
                     if _match(quote, norm_all[n - 1]):
                         found_at = n
