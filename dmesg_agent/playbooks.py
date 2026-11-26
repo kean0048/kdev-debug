@@ -41,6 +41,8 @@ SIGNATURE_TO_SUBSYSTEM = {
     "usb": "usb",
     "firmware": "firmware", "power": "power",
     "security": "security",
+    "systemd-failed": "service", "app-crash": "userspace",
+    "disk-space": "disk-space",
 }
 
 # concern text (model output) → subsystem keyword routing
@@ -56,6 +58,12 @@ SUBSYSTEM_KEYWORDS = {
     "firmware": ["firmware", "bios", "efi", "acpi", "microcode"],
     "power": ["power", "suspend", "resume", "acpi", "sleep", "standby", "battery"],
     "hardware": ["hardware", "mce", "machine check", "edac", "ecc", "dimm", "pcie", "aer", "motherboard"],
+    "service": ["service", "systemd", "unit", "daemon", "socket", "timer", "mount unit"],
+    "userspace": ["application", "app", "crash", "core dump", "coredump", "segfault", "abort", "library", "python", "java"],
+    "disk-space": ["space", "full", "enospc", "no space", "inode", "quota", "log rotation"],
+    "package": ["package", "dpkg", "apt", "dnf", "rpm", "dependency", "broken", "half-installed", "upgrade"],
+    "net-config": ["address", "route", "gateway", "dns", "resolver", "dhcp", "configuration", "nameserver", "bond"],
+    "performance": ["slow", "latency", "load", "pressure", "backlog", "congest", "throughput", "iowait"],
 }
 
 # global prefetch (no sudo; always included)
@@ -104,6 +112,27 @@ PREFETCH_BY_SUBSYSTEM: dict[str, list[CollectCmd]] = {
         CollectCmd("cat /sys/power/state 2>/dev/null", "supported sleep states"),
     ],
     "security": [],
+    "service": [
+        CollectCmd("systemctl --failed --no-legend --no-pager 2>/dev/null", "failed units"),
+        CollectCmd("systemctl is-system-running 2>/dev/null", "overall system state"),
+    ],
+    "userspace": [
+        CollectCmd("journalctl -p err -b --no-pager -n 40 2>/dev/null", "recent error-level journal lines"),
+    ],
+    "disk-space": [
+        CollectCmd("df -h 2>/dev/null | grep -viE 'tmpfs|udev' | head -12", "filesystem usage"),
+        CollectCmd("du -xsh /var/log 2>/dev/null", "log directory size"),
+    ],
+    "package": [
+        CollectCmd("dpkg --audit 2>/dev/null | head -15 || true", "dpkg consistency"),
+    ],
+    "net-config": [
+        CollectCmd("ip -br addr 2>/dev/null; ip route 2>/dev/null | head -8", "addresses and routes"),
+    ],
+    "performance": [
+        CollectCmd("cat /proc/pressure/io /proc/pressure/cpu 2>/dev/null", "IO/CPU pressure stall"),
+        CollectCmd("vmstat 1 3 2>/dev/null", "run-queue / iowait sampling"),
+    ],
 }
 
 # deep collection: more specialized, may need root — run per subsystem for inconclusive concerns only
@@ -148,6 +177,36 @@ DEEP_BY_SUBSYSTEM: dict[str, list[CollectCmd]] = {
     "hardware": [
         CollectCmd("journalctl -k --no-pager | grep -iE 'mce|machine check|edac|aer' | tail -80", "full hardware error records", sudo=True),
         CollectCmd("edac-util -s 2>/dev/null || ras-mc-ctl --summary 2>/dev/null", "memory ECC error counts", sudo=True),
+    ],
+    "service": [
+        CollectCmd("for u in $(systemctl --failed --no-legend --no-pager 2>/dev/null | awk \'{print $2}\' | head -4); do echo \"== $u\"; systemctl status --no-pager -n 30 $u 2>/dev/null; done", "status and last logs of failed units", sudo=True),
+        CollectCmd("journalctl -b --no-pager -p err --exclude-priority=warning 2>/dev/null | tail -100", "all error-priority journal lines this boot", sudo=True),
+    ],
+    "userspace": [
+        CollectCmd("coredumpctl list --no-legend --no-pager 2>/dev/null | tail -10", "recent core dumps", sudo=True),
+        CollectCmd("coredumpctl info $(coredumpctl list --no-legend --no-pager 2>/dev/null | tail -1 | awk \'{print $NF}\') 2>/dev/null | head -60", "details of the newest core dump", sudo=True),
+        CollectCmd("journalctl -b --no-pager | grep -iE 'segfault|core dumped|aborted|oom-kill.*killed process' | tail -60", "crash-related journal history", sudo=True),
+    ],
+    "disk-space": [
+        CollectCmd("df -i 2>/dev/null | grep -viE 'tmpfs|udev'", "inode usage"),
+        CollectCmd("du -xsh /var/log /var/cache /home /tmp 2>/dev/null | sort -h | tail -8", "largest space consumers", sudo=True),
+        CollectCmd("journalctl --disk-usage 2>/dev/null", "journal disk usage"),
+        CollectCmd("find /var/log -xdev -type f -size +100M -printf '%s %p\\n' 2>/dev/null | sort -rn | head -8", "largest log files", sudo=True),
+    ],
+    "package": [
+        CollectCmd("dpkg --audit 2>&1 | head -30 || true", "full dpkg audit output"),
+        CollectCmd("apt-get check 2>&1 | tail -10 || dnf -q check 2>&1 | tail -10 || true", "dependency resolution check"),
+        CollectCmd("journalctl -b --no-pager | grep -iE 'dpkg|apt|dnf|rpm' | tail -40", "package manager activity this boot", sudo=True),
+    ],
+    "net-config": [
+        CollectCmd("networkctl status 2>/dev/null | head -40 || nmcli -f DEVICE,STATE,CONNECTION fields device 2>/dev/null", "network manager state"),
+        CollectCmd("resolvectl status 2>/dev/null | head -25 || cat /etc/resolv.conf 2>/dev/null", "DNS resolution configuration"),
+        CollectCmd("ip -s link show 2>/dev/null | head -60", "per-interface counters"),
+    ],
+    "performance": [
+        CollectCmd("pidstat 1 3 2>/dev/null | tail -25 || top -b -n 1 | head -25", "per-task CPU sampling"),
+        CollectCmd("iotop -b -n 1 -o 2>/dev/null | head -15 || cat /proc/pressure/io 2>/dev/null", "top I/O consumers", sudo=True),
+        CollectCmd("vmstat 1 5 2>/dev/null", "run-queue/IO/swap sampling over 5s"),
     ],
 }
 

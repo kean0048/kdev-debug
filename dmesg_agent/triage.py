@@ -52,6 +52,10 @@ SIGNATURES: list[tuple[str, re.Pattern]] = [
         ("page-alloc", r"page allocation failure|pageblock|corrupted page|bad page"),
         ("workqueue", r"BUG: workqueue|workqueue.*lockup|workqueue: *WARNING"),
         ("warning", r"WARNING:"),
+        # non-kernel signals: appear in journals that mix kernel + userspace lines
+        ("systemd-failed", r"Main process exited|Failed to start|entered failed state|failed with result"),
+        ("app-crash", r"core dumped|Aborted|Assertion .* failed|double free|corrupted"),
+        ("disk-space", r"No space left on device|ENOSPC|write failed.*space"),
     ]
 ]
 

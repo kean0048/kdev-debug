@@ -32,15 +32,16 @@ def _check_evidences(items: list, field: str, label: str, norm_lines: list[str],
             if not _quote_exists(q, norm_lines):
                 errors.append(
                     f"{label}[{i}].evidence[{j}] quote was not found verbatim in the original log; "
-                    f"copy it verbatim or remove it: {str(q)[:80]!r}"
+                    f"copy it verbatim from the provided data or remove it: {str(q)[:80]!r}"
                 )
         if field and not str(item.get(field, "")).strip():
             errors.append(f"{label}[{i}] is missing {field} (a required field of the three-tier routing)")
 
 
-def validate_analysis(result: dict, log_lines: list[str]) -> list[str]:
+def validate_analysis(result: dict, corpus_lines: list[str]) -> list[str]:
+    """corpus = original log lines + collected scan/prefetch output lines."""
     errors: list[str] = []
-    norm = [normalize(l) for l in log_lines]
+    norm = [normalize(l) for l in corpus_lines]
     if not str(result.get("summary", "")).strip():
         errors.append("missing summary")
     if not isinstance(result.get("findings"), list):
@@ -63,7 +64,10 @@ def validate_analysis(result: dict, log_lines: list[str]) -> list[str]:
 
 def run_analysis(client, bundle: RawBundle, blocks_text: str, prefetch_text: str,
                  log_lines: list[str], source_text: str = "", retries: int = 1) -> tuple[dict | None, str]:
-    """First-pass analysis; on validation failure, feed the exact error list back for one retry (sashiko feedback-retry)."""
+    """First-pass analysis; on validation failure, feed the exact error list back
+    for one retry (sashiko feedback-retry). log_lines doubles as the evidence
+    corpus: pass log lines plus any collected scan/prefetch output lines so
+    evidence quoted from collections is valid."""
     msgs = build_messages(bundle, blocks_text, prefetch_text, source_text)
     result, answer = None, ""
     for attempt in range(retries + 1):
@@ -83,7 +87,8 @@ def _concern_text(c: dict) -> str:
 
 
 def deep_dive(client, executor, result: dict, log_lines: list[str],
-              bundle: RawBundle, max_concerns: int = 5) -> tuple[dict, list[str]]:
+              bundle: RawBundle, max_concerns: int = 5,
+              extra_corpus: list[str] | None = None) -> tuple[dict, list[str]]:
     """Returns (result, corpus). Per inconclusive concern: playbook collection
     (with sudo prompts) → verdict → merged back into result.
 
@@ -93,7 +98,7 @@ def deep_dive(client, executor, result: dict, log_lines: list[str],
     the model are never executed directly (log-injection defense).
     """
     concerns = [c for c in (result.get("inconclusive_concerns") or []) if isinstance(c, dict)]
-    corpus = list(log_lines)
+    corpus = list(log_lines) + (extra_corpus or [])
     outcome = {"confirmed": 0, "dismissed": 0, "inconclusive": 0, "skipped": 0}
 
     for c in concerns[:max_concerns]:

@@ -5,7 +5,8 @@ A [sashiko](https://sashiko.dev)-style AI diagnosis agent for kernel logs. Feed 
 Pipeline (v2):
 
 ```
-collect → triage prefilter → deterministic prefetch → LLM three-tier analysis
+collect → triage prefilter → proactive system scan (when the log is quiet) + deterministic prefetch
+        → LLM three-tier analysis
         → per inconclusive item: whitelisted playbook collection (sudo prompt) → LLM verdict re-check
         → verbatim evidence check → Markdown report
 ```
@@ -46,6 +47,49 @@ dmesg-agent --file dmesg.txt --kernel-src /works/Linux-debugs/linux-src
 ```
 
 Flow: extract `func+0x…[module]` symbols → function-definition index (built on first use, cached under `~/.cache/dmesg-agent/`, invalidated when the tree HEAD changes) → function bodies (≤120 lines) plus the file's recent commits → injected into the model context and attached to the report. When the source tree version differs from the running kernel, the report notes that "function bodies may be offset".
+
+## Beyond the kernel log
+
+dmesg alone misses problems that never print a line — failed systemd units,
+userspace crashes, full disks, resource pressure, broken packages, bad network
+config. When a local/SSH executor is available the agent proactively runs a
+**whitelisted system scan** (`systemscan.py`) whenever triage finds nothing
+suspicious; force it with `--scan`, suppress it with `--no-scan`.
+
+```bash
+dmesg-agent --scan                       # always scan, even when the log has signals
+dmesg-agent --vmcore /var/crash/vmcore.2 --vmlinux /work/vmlinux   # post-mortem via crash(8)
+dmesg-agent --live-probe                 # live kernel forensics via drgn (D-state tasks, /proc/kcore)
+dmesg-agent --cross-boot 2               # error logs of the previous 2 boots (recurrence check)
+```
+
+All four feed their output into the same prompt + evidence corpus (quoted data
+is verbatim-verified like log lines), attach as a report appendix, and degrade
+to a one-line "skipped: <reason>" entry when crash/drgn/root/vmlinux are
+missing. `--vmlinux` also reads `DMESG_AGENT_VMLINUX`. The crash batch is a
+fixed read-only script (`log/sys/bt/ps/mod/net/mount/dev`) — never interactive
+commands, never model-chosen ones. New subsystems (service / userspace /
+disk-space / package / net-config / performance) route through the same
+prefetch/deep playbooks, and triage learned their signatures
+(`Failed to start`, `core dumped`, `No space left`, …).
+
+## Evaluation harness
+
+`evals/` measures pipeline quality the way sashiko/syzkaller are measured:
+known-answer cases scored automatically.
+
+```bash
+python evals/run_eval.py            # offline self-test (stub client; also runs under pytest)
+python evals/run_eval.py --live --min-locate 0.8   # real endpoint, fail CI below 80% locate
+python evals/run_eval.py --live --json             # machine-readable metrics
+```
+
+A case = `evals/cases/<name>/{log.txt, expected.json}` (expected subsystem,
+severity, keywords; optional `must_not_dismiss`). Metrics: `locate_rate`,
+`severity_rate`, `evidence_rate` (anti-hallucination: every quote passed
+verbatim check), `dismissal_rate`. Add a case by dropping in a log whose root
+cause you know plus its expected.json — the offline pytest guard
+(`tests/test_eval.py`) keeps the harness honest.
 
 ## LLM backend
 
@@ -89,6 +133,7 @@ The config file lives at `~/.config/dmesg-agent/config.json` (honors `XDG_CONFIG
 ## Known limitations / future directions
 
 - local mode cannot read dmesg without root (use `sudo dmesg | dmesg-agent --file -`)
-- `--file` offline mode has no executor: no prefetch, no deep verification
-- future: call-trace ↔ kernel-source correlation, multi-turn follow-ups, expanding playbooks per issue
+- `--file` offline mode has no executor: no scan/prefetch/deep verification — only the proactive scan, vmcore, drgn probe and cross-boot require a live or SSH target
+- vmcore analysis needs the crash utility + a matching vmlinux on hand; the agent never fetches debuginfo itself
+- the proactive scan is a fixed whitelist snapshot, not continuous monitoring; multi-turn follow-up Q&A is not implemented
 - small local models occasionally quote a line number off by 1; verify already auto-corrects and flags it

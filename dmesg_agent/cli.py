@@ -24,11 +24,13 @@ from .executors import Executor, LocalExecutor, SSHExecutor
 from .llm import Client, LLMError
 from .passwds import PassResolver
 from .srcmap import SrcMap, extract_symbols
+from .systemscan import run_cross_boot, run_live_probe, run_system_scan
 from .playbooks import run_prefetch
-from .prompts import render_prefetch
+from .prompts import render_prefetch, render_scan
 from .report import render
 from .triage import Block, find_blocks, render_blocks
 from .verify import VerifySummary, verify_result
+from .vmcore import analyze_vmcore
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -59,6 +61,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="kernel source tree (git) for call-trace source correlation; "
                         "defaults to the DMESG_AGENT_KERNEL_SRC env var")
     p.add_argument("--no-srcmap", action="store_true", help="disable source correlation")
+    p.add_argument("--scan", action="store_true",
+                   help="proactive system scan even when the log looks clean (failed units, "
+                        "userspace errors, disk/inode, load, package state, network config)")
+    p.add_argument("--no-scan", action="store_true",
+                   help="never run the proactive system scan (default: scan only when triage finds nothing)")
+    p.add_argument("--vmcore", metavar="PATH", help="kernel crash dump (vmcore) to analyze with the crash utility")
+    p.add_argument("--vmlinux", help="vmlinux debuginfo for --vmcore (or set DMESG_AGENT_VMLINUX)")
+    p.add_argument("--live-probe", action="store_true",
+                   help="live kernel data-structure forensics via drgn (/proc/kcore, needs root)")
+    p.add_argument("--cross-boot", type=int, default=0, metavar="N",
+                   help="correlate error-level kernel logs of the previous N boots (recurrence check)")
     p.add_argument("--max-tokens", type=int, help="model output ceiling (default 32768)")
     p.add_argument("--model", help="model name (default: auto-discover)")
     p.add_argument("--base-url", help="OpenAI-compatible API base URL")
@@ -182,6 +195,30 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     log("[2/5]", f"prefilter: {len(blocks)} segments / {len(lines)} lines")
 
+    scan_text = ""
+    scan_lines: list[str] = []
+    if executor is not None:
+        no_signal = len(blocks) == 1 and blocks[0].names == ["whole-log"]
+        if args.scan or (no_signal and not args.no_scan):
+            log("[3/5]", "proactive system scan (non-kernel-log problems)")
+            scan_evs = run_system_scan(executor)
+        else:
+            scan_evs = []
+        if args.vmcore:
+            log("[3/5]", f"vmcore analysis with crash ({args.vmcore})")
+            scan_evs = scan_evs + [analyze_vmcore(
+                executor, args.vmcore, args.vmlinux or os.environ.get("DMESG_AGENT_VMLINUX"))]
+        if args.live_probe:
+            log("[3/5]", "live kernel probe via drgn")
+            scan_evs = scan_evs + run_live_probe(executor)
+        if args.cross_boot:
+            log("[3/5]", f"cross-boot correlation: previous {args.cross_boot} boot(s)")
+            scan_evs = scan_evs + run_cross_boot(executor, args.cross_boot)
+        if scan_evs:
+            scan_text = render_scan(scan_evs)
+            for ev in scan_evs:
+                scan_lines.extend(ev.output.splitlines())
+
     prefetch_text = ""
     if executor is not None and not args.no_prefetch:
         sig_names = {n for b in blocks for n in b.names}
@@ -219,17 +256,18 @@ def main(argv: list[str] | None = None) -> int:
         cfg.max_tokens = args.max_tokens
     client = Client(cfg)
     deep_used = False
-    corpus = lines
     try:
         log("[4/5]", f"LLM three-tier analysis ({cfg.base_url})")
-        result, answer = run_analysis(client, bundle, blocks_text, prefetch_text, lines,
-                                      source_text=source_text)
+        corpus = lines + scan_lines
+        result, answer = run_analysis(client, bundle, blocks_text, prefetch_text, corpus,
+                                      source_text=source_text, scan_text=scan_text)
         if result is not None and not args.no_deep and executor is not None \
                 and result.get("inconclusive_concerns"):
             n = len(result["inconclusive_concerns"])
             log("[5/5]", f"deep-verifying {min(n, args.max_verify)}/{n} open questions "
                          "(a password prompt may appear for root-level collection)")
-            result, corpus = deep_dive(client, executor, result, lines, bundle, max_concerns=args.max_verify)
+            result, corpus = deep_dive(client, executor, result, lines, bundle,
+                                       max_concerns=args.max_verify, extra_corpus=scan_lines)
             deep_used = True
     except LLMError as e:
         print(f"error: {e}", file=sys.stderr)
@@ -252,7 +290,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         report = render(result, bundle, summary, blocks, raw_text=answer,
                         prefetch_used=bool(prefetch_text), deep_used=deep_used,
-                        source_text=source_text, srcmap_version=srcmap_version)
+                        source_text=source_text, srcmap_version=srcmap_version,
+                        scan_used=bool(scan_text), scan_text=scan_text)
         if args.output:
             with open(args.output, "w", encoding="utf-8") as f:
                 f.write(report + "\n")

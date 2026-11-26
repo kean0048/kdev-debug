@@ -28,10 +28,12 @@ def _evidence_table(evidences) -> list[str]:
 
 def render(result: dict | None, bundle: RawBundle, summary: VerifySummary,
            blocks: list[Block], raw_text: str = "", prefetch_used: bool = False,
-           deep_used: bool = False, source_text: str = "", srcmap_version: str = "") -> str:
+           deep_used: bool = False, source_text: str = "", srcmap_version: str = "",
+           scan_used: bool = False, scan_text: str = "") -> str:
     out: list[str] = ["# dmesg AI diagnosis report", ""]
     out.append(f"- Source: `{bundle.source}`  Kernel: {bundle.kernel_version}  Distro: {bundle.distro}")
     out.append(f"- Pipeline: prefilter {len(blocks)} segments"
+               f"{' → proactive system scan' if scan_used else ''}"
                f"{' → prefetched context' if prefetch_used else ''}"
                f" → LLM three-tier analysis{' → deep verification' if deep_used else ''} → evidence check")
     rate = summary.rate if summary.total else "no evidence quoted"
@@ -121,6 +123,11 @@ def render(result: dict | None, bundle: RawBundle, summary: VerifySummary,
                        f"\n  - Counter-evidence: `{_esc(d.get('counter_evidence_quote', ''))[:120]}`")
         for n in non_issues:
             out.append(f"- {n}")
+        out.append("")
+
+    if scan_text:
+        out.append("## Appendix: proactive system scan / forensics data\n")
+        out.append(scan_text)
         out.append("")
 
     if source_text:

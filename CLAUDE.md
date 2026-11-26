@@ -24,10 +24,13 @@ No lint/format config exists in the repo. Tests are pure-Python offline (no netw
 Pipeline (orchestrated in `cli.py:main`, stages [1/5]–[5/5]):
 
 ```
-collect → triage prefilter → deterministic prefetch → LLM 3-tier analysis
+collect → triage prefilter → proactive system scan (quiet log) / --scan → deterministic prefetch
+  → LLM 3-tier analysis
   → per inconclusive concern: playbook whitelist collection (sudo prompt) → LLM verdict
   → verbatim evidence verification → Markdown report
 ```
+
+Optional evidence sources joined into the same corpus/prompt (all in `systemscan.py`/`vmcore.py`): `--vmcore` (+`--vmlinux`) post-mortem via a fixed read-only crash batch script; `--live-probe` drgn forensics over /proc/kcore; `--cross-boot N` prior boots' error journals. Each degrades to a "skipped: reason" evidence entry when its tool/root/vmlinux is missing.
 
 Key modules and the invariants that tie them together:
 
@@ -40,6 +43,9 @@ Key modules and the invariants that tie them together:
 - **`srcmap.py`** — v3 source correlation: extracts `func+0x…[module]` from call traces, resolves them via a `git grep` function-index of a kernel tree (`--kernel-src` or `DMESG_AGENT_KERNEL_SRC`), caches at `~/.cache/dmesg-agent/` keyed by tree HEAD. Deterministic — the model never guesses source code. The report flags that function bodies "may be offset" when tree version ≠ running kernel.
 - **`llm.py`** — OpenAI-compatible client; model auto-discovered from `/v1/models` when unset. Config precedence: CLI flag > `OPENAI_BASE_URL`/`OPENAI_MODEL`/`OPENAI_API_KEY` env > persistent file `~/.config/dmesg-agent/config.json` (`config.py`; managed via the `dmesg-agent config show|set|unset` subcommand, keys `base_url/model/api_key/max_tokens/timeout`, file mode 0600) > defaults (base_url from `DEFAULT_BASE_URL` in `config.py`). JSON-tolerance chain: strip fences → brace-slice → repair truncation → give up (raw output rendered, exit 4).
 - **`prompts.py`** — the three-tier contract lives here; changing schema fields requires matching changes in `analyze.validate_*` and `report.render`.
+
+- **`systemscan.py` / `vmcore.py`** — proactive whitelisted scan for problems dmesg cannot show (failed units, userspace crashes, disk/inode, load/PSI, package state, net config), plus crash(8)/drgn/cross-boot evidence. Their output renders via `prompts.render_scan`, joins the evidence corpus (`run_analysis`'s corpus argument, `deep_dive(extra_corpus=)`), and lands in the report's scan/forensics appendix.
+- **`evals/run_eval.py`** — known-answer harness: `evals/cases/<name>/{log.txt,expected.json}` scored for locate/severity/evidence(no-hallucination)/dismissal; offline stub client keeps it network-free (guarded by `tests/test_eval.py`); `--live` hits the real endpoint, `--ab` compares triage-on vs whole-log.
 
 Exit codes: 2 = collect/triage error, 3 = LLM error, 4 = model returned no parseable JSON, 0 = success.
 
