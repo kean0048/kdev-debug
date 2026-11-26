@@ -100,9 +100,12 @@ class Client:
             try:
                 if stream_cb is not None:
                     try:
-                        return self._chat_once(url, {**base, "stream": True}, stream_cb)
+                        streamed = self._chat_once(url, {**base, "stream": True}, stream_cb)
+                        # servers that ignore stream=true and answer with plain
+                        # JSON yield an empty stream: fall through to non-stream
+                        if streamed:
+                            return streamed
                     except (requests.RequestException, KeyError, IndexError) as e:
-                        # server may not support streaming: fall through once
                         last_err = e
                 return self._chat_once(url, {**base, "stream": False})
             except (requests.RequestException, KeyError, IndexError) as e:

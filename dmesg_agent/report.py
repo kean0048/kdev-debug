@@ -78,6 +78,10 @@ def render(result: dict | None, bundle: RawBundle, summary: VerifySummary,
             out.append(f"- Subsystem: {f.get('subsystem', '?')}")
             if f.get("evidence_verified") is False:
                 out.append("- ⚠ **None of the evidence could be verified against the original log — treat this conclusion with suspicion**")
+            rec = f.get("recurrence")
+            if rec:
+                out.append(f"- 🔁 Recurrence: seen {rec.get('count', 1)} times on this host "
+                           f"(first seen {rec.get('first_seen', '?')})")
             if f.get("severity_explanation"):
                 out.append(f"- Severity rationale: {f['severity_explanation']}")
             out.append(f"- Root-cause hypothesis: {f.get('root_cause_hypothesis', '(none)')}")

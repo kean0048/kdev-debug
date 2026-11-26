@@ -65,7 +65,7 @@ dmesg-agent --live-probe                 # live kernel forensics via drgn (D-sta
 dmesg-agent --cross-boot 2               # error logs of the previous 2 boots (recurrence check)
 ```
 
-All four feed their output into the same prompt + evidence corpus (quoted data
+Every confirmed finding is additionally fingerprinted for **cross-run recurrence tracking**: the same bug (Jaccard ≥ 0.5 content overlap, reworded titles included) is counted across runs in `~/.local/state/dmesg-agent/recurrence.json` (0600) and reported as "🔁 Recurrence: seen N times" — no LLM tokens spent on the comparison. All four feed their output into the same prompt + evidence corpus (quoted data
 is verbatim-verified like log lines), attach as a report appendix, and degrade
 to a one-line "skipped: <reason>" entry when crash/drgn/root/vmlinux are
 missing. `--vmlinux` also reads `DMESG_AGENT_VMLINUX`. The crash batch is a

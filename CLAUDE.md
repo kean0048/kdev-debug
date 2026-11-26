@@ -45,6 +45,7 @@ Key modules and the invariants that tie them together:
 - **`prompts.py`** — the three-tier contract lives here; changing schema fields requires matching changes in `analyze.validate_*` and `report.render`.
 
 - **`systemscan.py` / `vmcore.py`** — proactive whitelisted scan for problems dmesg cannot show (failed units, userspace crashes, disk/inode, load/PSI, package state, net config), plus crash(8)/drgn/cross-boot evidence. Their output renders via `prompts.render_scan`, joins the evidence corpus (`run_analysis`'s corpus argument, `deep_dive(extra_corpus=)`), and lands in the report's scan/forensics appendix.
+- **`tracking.py`** — zero-token recurrence store: content-word fingerprint (sha256 of sorted stopword-free words) + Jaccard ≥ 0.5 near-duplicate merge, keyed per host in `~/.local/state/dmesg-agent/recurrence.json` (0600, atomic); cli annotates recurring findings after verify.
 - **`evals/run_eval.py`** — known-answer harness: `evals/cases/<name>/{log.txt,expected.json}` scored for locate/severity/evidence(no-hallucination)/dismissal; offline stub client keeps it network-free (guarded by `tests/test_eval.py`); `--live` hits the real endpoint, `--ab` compares triage-on vs whole-log.
 
 Exit codes: 2 = collect/triage error, 3 = LLM error, 4 = model returned no parseable JSON, 0 = success.

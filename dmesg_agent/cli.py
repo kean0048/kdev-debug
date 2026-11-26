@@ -25,6 +25,7 @@ from .llm import Client, LLMError
 from .passwds import PassResolver
 from .srcmap import SrcMap, extract_symbols
 from .systemscan import run_cross_boot, run_live_probe, run_system_scan
+from .tracking import record_recurrences
 from .playbooks import run_prefetch
 from .prompts import render_prefetch, render_scan
 from .report import render
@@ -331,6 +332,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if isinstance(result, dict):
         summary = verify_result(result, corpus)
+        host = args.ssh or bundle.source
+        try:
+            record_recurrences(result, host)
+        except OSError as e:
+            print(f"warning: recurrence state not updated ({e})", file=sys.stderr)
     else:
         summary = VerifySummary()
     if getattr(client, "last_finish_reason", None) == "length":
