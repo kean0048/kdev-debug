@@ -137,7 +137,7 @@ class StubClient:
     def __init__(self, log_lines):
         self._lines = log_lines
 
-    def chat(self, messages, retries: int = 0):
+    def chat(self, messages, retries: int = 0, stream_cb=None):
         blob = _norm("\n".join(self._lines))
         findings = []
         for rx, sub, title, kws in _SIG_TO:

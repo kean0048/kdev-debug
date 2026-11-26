@@ -32,7 +32,7 @@ class FakeClient:
         self.answers = list(answers)
         self.calls = []
 
-    def chat(self, messages):
+    def chat(self, messages, stream_cb=None):
         self.calls.append(messages)
         return self.answers.pop(0) if self.answers else json.dumps({"error": "no more answers"})
 

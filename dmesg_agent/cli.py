@@ -147,6 +147,46 @@ class _Log:
             print(f"{stage} {msg}", file=sys.stderr)
 
 
+class _Streamer:
+    """Live model output to stderr (sashiko-style): reasoning is summarized as
+    progress ticks, the answer itself is printed as it arrives."""
+
+    def __init__(self, label: str):
+        self.label = label
+        self.reason_chars = 0
+        self.content_started = False
+        print(f"  ▶ {label}", file=sys.stderr, flush=True)
+
+    def cb(self, part: tuple[str, str]) -> None:
+        kind, txt = part
+        if kind == "reasoning":
+            before = self.reason_chars // 4000
+            self.reason_chars += len(txt)
+            if self.reason_chars // 4000 != before:
+                print(f"    … thinking ({self.reason_chars} chars)", file=sys.stderr, flush=True)
+        else:
+            if not self.content_started:
+                self.content_started = True
+                print("    answer: ", end="", file=sys.stderr, flush=True)
+            print(txt, end="", file=sys.stderr, flush=True)
+
+    def finish(self) -> None:
+        if self.content_started:
+            print(file=sys.stderr, flush=True)
+
+
+def _make_stream_factory():
+    current: list[_Streamer | None] = [None]
+
+    def make(label: str):
+        if current[0] is not None:
+            current[0].finish()
+        current[0] = _Streamer(label)
+        return current[0].cb
+
+    return make
+
+
 def _make_executor(args, resolver: PassResolver) -> Executor | None:
     if args.file:
         return None
@@ -269,15 +309,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         log("[4/5]", f"LLM three-tier analysis ({cfg.base_url})")
         corpus = lines + scan_lines
+        make_stream = _make_stream_factory()
         result, answer = run_analysis(client, bundle, blocks_text, prefetch_text, corpus,
-                                      source_text=source_text, scan_text=scan_text)
+                                      source_text=source_text, scan_text=scan_text,
+                                      make_stream=make_stream)
         if result is not None and not args.no_deep and executor is not None \
                 and result.get("inconclusive_concerns"):
             n = len(result["inconclusive_concerns"])
             log("[5/5]", f"deep-verifying {min(n, args.max_verify)}/{n} open questions "
                          "(a password prompt may appear for root-level collection)")
             result, corpus = deep_dive(client, executor, result, lines, bundle,
-                                       max_concerns=args.max_verify, extra_corpus=scan_lines)
+                                       max_concerns=args.max_verify, extra_corpus=scan_lines,
+                                       make_stream=make_stream)
             deep_used = True
     except LLMError as e:
         print(f"error: {e}", file=sys.stderr)

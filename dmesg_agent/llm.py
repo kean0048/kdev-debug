@@ -46,24 +46,65 @@ class Client:
             raise LLMError(f"no usable model available at {self.cfg.base_url}")
         return models[0]
 
-    def chat(self, messages: list[dict], retries: int = 2) -> str:
+    def _chat_once(self, url: str, payload: dict,
+                   stream_cb=None) -> str:
+        """One request; when stream_cb is given, consume SSE deltas, pass text
+        chunks to it (reasoning chunks as ('reasoning', txt)) and return the
+        assembled content."""
+        resp = self._session.post(url, json=payload, timeout=self.cfg.timeout,
+                                  stream=stream_cb is not None)
+        resp.raise_for_status()
+        if stream_cb is None:
+            choice = resp.json()["choices"][0]
+            self.last_finish_reason = choice.get("finish_reason")
+            return choice["message"]["content"]
+        parts: list[str] = []
+        try:
+            for raw in resp.iter_lines(decode_unicode=True):
+                if not raw or not raw.startswith("data:"):
+                    continue
+                body = raw[5:].strip()
+                if body == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(body)
+                except json.JSONDecodeError:
+                    continue
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                if choices[0].get("finish_reason"):
+                    self.last_finish_reason = choices[0]["finish_reason"]
+                delta = choices[0].get("delta") or {}
+                text = delta.get("content") or ""
+                reasoning = delta.get("reasoning_content") or ""
+                if reasoning:
+                    stream_cb(("reasoning", reasoning))
+                if text:
+                    parts.append(text)
+                    stream_cb(("content", text))
+        finally:
+            resp.close()
+        return "".join(parts)
+
+    def chat(self, messages: list[dict], retries: int = 2, stream_cb=None) -> str:
         url = f"{self.cfg.base_url}/v1/chat/completions"
-        payload = {
+        base = {
             "model": self.cfg.model or self.resolve_model(),
             "messages": messages,
             "temperature": self.cfg.temperature,
             "max_tokens": self.cfg.max_tokens,
-            "stream": False,
         }
         last_err: Exception | None = None
         for attempt in range(retries + 1):
             try:
-                resp = self._session.post(url, json=payload, timeout=self.cfg.timeout)
-                resp.raise_for_status()
-                data = resp.json()
-                choice = data["choices"][0]
-                self.last_finish_reason = choice.get("finish_reason")
-                return choice["message"]["content"]
+                if stream_cb is not None:
+                    try:
+                        return self._chat_once(url, {**base, "stream": True}, stream_cb)
+                    except (requests.RequestException, KeyError, IndexError) as e:
+                        # server may not support streaming: fall through once
+                        last_err = e
+                return self._chat_once(url, {**base, "stream": False})
             except (requests.RequestException, KeyError, IndexError) as e:
                 last_err = e
                 if attempt < retries:

@@ -64,7 +64,7 @@ def validate_analysis(result: dict, corpus_lines: list[str]) -> list[str]:
 
 def run_analysis(client, bundle: RawBundle, blocks_text: str, prefetch_text: str,
                  log_lines: list[str], source_text: str = "", retries: int = 1,
-                 scan_text: str = "") -> tuple[dict | None, str]:
+                 scan_text: str = "", make_stream=None) -> tuple[dict | None, str]:
     """First-pass analysis; on validation failure, feed the exact error list back
     for one retry (sashiko feedback-retry). log_lines doubles as the evidence
     corpus: pass log lines plus any collected scan/prefetch output lines so
@@ -72,7 +72,8 @@ def run_analysis(client, bundle: RawBundle, blocks_text: str, prefetch_text: str
     msgs = build_messages(bundle, blocks_text, prefetch_text, source_text, scan_text)
     result, answer = None, ""
     for attempt in range(retries + 1):
-        answer = client.chat(msgs)
+        cb = make_stream(f"analysis attempt {attempt + 1}") if make_stream else None
+        answer = client.chat(msgs, stream_cb=cb)
         result = parse_json_response(answer)
         errors = validate_analysis(result, log_lines) if result is not None else ["output is not a valid JSON object"]
         if not errors:
@@ -89,7 +90,7 @@ def _concern_text(c: dict) -> str:
 
 def deep_dive(client, executor, result: dict, log_lines: list[str],
               bundle: RawBundle, max_concerns: int = 5,
-              extra_corpus: list[str] | None = None) -> tuple[dict, list[str]]:
+              extra_corpus: list[str] | None = None, make_stream=None) -> tuple[dict, list[str]]:
     """Returns (result, corpus). Per inconclusive concern: playbook collection
     (with sudo prompts) → verdict → merged back into result.
 
@@ -109,7 +110,8 @@ def deep_dive(client, executor, result: dict, log_lines: list[str],
         msgs = build_verdict_messages(c, evidences, bundle)
         verdict, answer = None, ""
         for attempt in range(2):
-            answer = client.chat(msgs)
+            cb = make_stream(f"verdict: {c.get('title', '')[:40]}") if make_stream else None
+            answer = client.chat(msgs, stream_cb=cb)
             verdict = parse_json_response(answer)
             errors = validate_verdict(verdict, corpus)
             if not errors:
