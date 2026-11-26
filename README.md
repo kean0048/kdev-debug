@@ -39,6 +39,76 @@ When deep verification hits a collection command that needs root: it asks for th
 
 Common options: `--no-deep` (skip deep verification), `--no-prefetch`, `--max-verify N`, `--no-triage`, `--json`, `--askpass auto|terminal|gui|none`, `--max-tokens`.
 
+### Option reference
+
+Data source (mutually exclusive; neither = collect from the local machine):
+
+| Option | Meaning |
+|---|---|
+| `--ssh USER@HOST` | collect and diagnose a remote machine over SSH |
+| `--file PATH` | analyze an offline log (`.gz` supported, `-` = stdin; no executor → no scan/prefetch/deep verification) |
+
+Collection & authentication:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--boot now\|previous` | `now` | which boot's kernel log to collect |
+| `--port N` | 22 | SSH port |
+| `--user NAME` | — | SSH user when `--ssh` has no `user@` prefix |
+| `--key PATH` | — | SSH private key path |
+| `--ssh-password` | off | password-based SSH login: prompt hidden (or env `DMESG_AGENT_SSH_PASSWORD`); keys/agent skipped |
+| `--askpass auto\|terminal\|gui\|none` | `auto` | how to obtain the sudo password (`none` skips privileged collection) |
+
+Offline-log metadata:
+
+| Option | Meaning |
+|---|---|
+| `--kernel VER` / `--distro NAME` | what the offline log came from (shown in the report) |
+
+Pipeline switches:
+
+| Option | Meaning |
+|---|---|
+| `--no-triage` | skip signature prefilter; send the whole log to the model |
+| `--no-prefetch` | skip deterministic pre-analysis collection |
+| `--scan` | always run the proactive system scan (default: only when triage finds nothing) |
+| `--no-scan` | never run the proactive scan |
+| `--no-deep` | skip deep verification of open questions |
+| `--max-verify N` | cap on deep-verified concerns (default 5) |
+
+Advanced forensics (require an executor; each degrades to a "skipped" note if its tool is missing):
+
+| Option | Meaning |
+|---|---|
+| `--vmcore PATH` | analyze a kernel crash dump with crash(8) |
+| `--vmlinux PATH` | debuginfo for `--vmcore` (or env `DMESG_AGENT_VMLINUX`) |
+| `--live-probe` | live kernel forensics via drgn (`/proc/kcore`, root) |
+| `--cross-boot N` | previous N boots' error-level kernel logs (recurrence) |
+| `--kernel-src PATH` | kernel git tree for call-trace source correlation (or env `DMESG_AGENT_KERNEL_SRC`) |
+| `--no-srcmap` | disable source correlation |
+
+LLM backend & output:
+
+| Option | Meaning |
+|---|---|
+| `--base-url URL` / `--model NAME` / `--api-key KEY` | OpenAI-compatible endpoint overrides (env or config file also work) |
+| `--max-tokens N` | model output ceiling (default 32768; a truncation warning is printed if hit) |
+| `-o, --output PATH` | write the Markdown report to a file (default: stdout) |
+| `--json` | emit the structured result instead of the report |
+| `-v` | stage-by-stage progress (stderr), including live model streaming |
+| `--version` | print version |
+
+Subcommands:
+
+| Command | Meaning |
+|---|---|
+| `dmesg-agent config show\|set <k> <v>\|unset <k>` | manage `~/.config/dmesg-agent/config.json`; keys `base_url` / `model` / `api_key` / `max_tokens` / `timeout` |
+| `dmesg-agent eval [--live] [--ab] [--json] [--min-locate F]` | run the evaluation harness (see below) |
+
+Environment variables: `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN` (fallback), `DMESG_AGENT_SSH_PASSWORD`, `DMESG_AGENT_KERNEL_SRC`, `DMESG_AGENT_VMLINUX`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` (recurrence store location). Config precedence everywhere: CLI flag > env var > config file > default.
+
+Always on, no flag: model output streams live to stderr; confirmed findings are fingerprinted into the per-host recurrence store (`~/.local/state/dmesg-agent/recurrence.json`) and re-appear as "🔁 Recurrence" annotations.
+
 ### Source correlation (v3)
 
 Given a kernel source tree (git), call traces in the log are resolved to function source **deterministically**:
