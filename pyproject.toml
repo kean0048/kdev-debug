@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dmesg-agent"
-version = "0.1.0"
+dynamic = ["version"]
 description = "sashiko-style dmesg AI diagnosis agent: pinpoints kernel/system issues with a verifiable chain of evidence"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -32,3 +32,6 @@ dmesg-agent = "dmesg_agent.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["dmesg_agent*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "dmesg_agent.__version__"}

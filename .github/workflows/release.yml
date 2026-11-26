@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # GitHub Release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Guard — tag must match package version
+        run: |
+          pip install -e . -q
+          pkg=$(python -c "import dmesg_agent; print(dmesg_agent.__version__)")
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$pkg" != "$tag" ]; then
+            echo "tag v$tag != package version $pkg" >&2; exit 1
+          fi
+      - name: Tests + offline eval
+        run: |
+          pip install -e ".[dev]" -q
+          python -m pytest tests/ -q
+          dmesg-agent eval
+      - name: Build sdist + wheel
+        run: |
+          pip install build -q
+          python -m build
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+      # optional PyPI publishing: uncomment after configuring a Trusted
+      # Publisher on pypi.org (project dmesg-agent, owner kean0048) — no API
+      # token needed.
+      # - name: Publish to PyPI
+      #   uses: pypa/gh-action-pypi-publish@release/v1
