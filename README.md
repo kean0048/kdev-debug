@@ -87,9 +87,14 @@ python evals/run_eval.py --live --json             # machine-readable metrics
 ```
 
 A case = `evals/cases/<name>/{log.txt, expected.json}` (expected subsystem,
-severity, keywords; optional `must_not_dismiss`). Metrics: `locate_rate`,
-`severity_rate`, `evidence_rate` (anti-hallucination: every quote passed
-verbatim check), `dismissal_rate`. Add a case by dropping in a log whose root
+severity, keywords; optional `must_not_dismiss`, `expected_count`). Scoring
+follows the sashiko benchmark's three-state protocol: every case is
+**DETECTED** (confirmed finding, right tier/severity, all quotes verbatim),
+**PARTIAL** (spotted but parked in inconclusive, or wrong severity, or a
+fabricated quote) or **MISSED**; plus `noise_rate` = findings emitted per
+expected bug (sashiko's findings/patch signal-to-noise, adapted). Metrics:
+`detected_rate / partial_rate / missed_rate / detect_rate / evidence_rate /
+dismissal_rate / noise_rate`. Add a case by dropping in a log whose root
 cause you know plus its expected.json — the offline pytest guard
 (`tests/test_eval.py`) keeps the harness honest.
 

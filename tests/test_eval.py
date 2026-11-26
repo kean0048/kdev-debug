@@ -23,7 +23,8 @@ def test_offline_stub_locates_every_case():
             rows[case.name] = run_case(case, StubClient(lines))
     assert rows, "no eval cases found"
     m = aggregate(rows)
-    assert m["locate_rate"] == 1.0, rows
+    assert m["detect_rate"] == 1.0, rows
+    assert m["missed_rate"] == 0.0, rows
     assert m["evidence_rate"] == 1.0, rows
 
 
@@ -41,7 +42,31 @@ def test_score_case_detects_wrong_subsystem():
                          "any_keywords": ["nvme"]}, "must_not_dismiss": []}
     bad = {"findings": [{"title": "nvme timeout", "subsystem": "gpu", "severity": "high",
                          "evidence": [{"quote": "x", "verified": True}]}]}
-    assert not score_case(bad, expect)["located"]
+    assert score_case(bad, expect)["status"] == "MISSED"
+
+
+def test_partial_when_inconclusive_or_wrong_severity():
+    expect = {"expect": {"subsystem": ["storage"], "severity": ["critical"],
+                         "any_keywords": ["nvme"]}, "must_not_dismiss": []}
+    inc = {"inconclusive_concerns": [{"title": "nvme timeout", "subsystem": "storage",
+                                      "evidence": [{"quote": "x", "verified": True}]}]}
+    assert score_case(inc, expect)["status"] == "PARTIAL"
+    wrong_sev = {"findings": [{"title": "nvme timeout", "subsystem": "storage",
+                               "severity": "low", "evidence": [{"quote": "x", "verified": True}]}]}
+    assert score_case(wrong_sev, expect)["status"] == "PARTIAL"
+
+
+def test_noise_rate_counts_emitted_findings():
+    expect = {"expect": {"subsystem": ["memory"], "severity": ["high"],
+                         "any_keywords": ["oom"]}, "must_not_dismiss": [],
+              "expected_count": 1}
+    noisy = {"findings": [
+        {"title": "oom kill", "subsystem": "memory", "severity": "high",
+         "evidence": [{"quote": "x", "verified": True}]},
+        {"title": "extra a", "subsystem": "gpu", "severity": "low", "evidence": []},
+        {"title": "extra b", "subsystem": "net", "severity": "low", "evidence": []}]}
+    r = score_case(noisy, expect)
+    assert r["status"] == "DETECTED" and r["findings_emitted"] == 3
 
 
 def test_score_case_detects_hallucinated_quote():

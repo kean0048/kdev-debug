@@ -7,19 +7,23 @@ Each case is a directory under evals/cases/<name>/ with:
                     must_not_dismiss[] }
 Subsystem/severity/keyword lists are OR-groups: a hit on any listed value counts.
 
-Scoring (per case, against a single --json result):
-  - located      : a finding (or inconclusive, for "soft" cases) whose subsystem is
-                   in expect.subsystem AND whose title+root_cause matches any keyword.
-  - severity_ok  : the located item's severity is in expect.severity.
-  - no_halluc    : every evidence.quote passed verbatim verification
-                   (result items carry `verified` from verify_result).
-  - not_dismissed: nothing in must_not_dismiss appears as a verified dismissed quote.
+Scoring per case — sashiko-benchmark-style three-state classification
+(src/benchmark.rs DETECTED / PARTIALLY_DETECTED / MISSED):
+  DETECTED : a *confirmed finding* whose subsystem matches expect.subsystem,
+             whose text matches any_keywords, severity is in expect.severity,
+             and every quote verified verbatim.
+  PARTIAL  : the issue was spotted but in the inconclusive tier, or severity
+             is wrong, or some evidence failed verbatim verification.
+  MISSED   : not located at all.
+Plus noise: findings emitted per case vs expected_count (default 1) —
+sashiko tracks findings/patch signal-to-noise; we track findings/case.
 
 Headline metrics:
-  locate_rate     = located / cases
-  severity_rate   = severity_ok / located
-  evidence_rate   = no_halluc / cases          (anti-hallucination pass rate)
-  dismissal_rate  = not_dismissed / cases
+  detected_rate / partial_rate / missed_rate (sum to 1)
+  detect_rate    = (detected + partial) / cases   (what --min-locate gates on)
+  evidence_rate  = cases with no fabricated quote / cases
+  dismissal_rate = cases honoring must_not_dismiss / cases
+  noise_rate     = total findings emitted / total expected bugs
 
 Modes:
   --live            call the configured LLM endpoint for each case (real eval)
@@ -31,7 +35,7 @@ Usage:
   python evals/run_eval.py --live [--base-url ... --model ... --api-key ...]
   python evals/run_eval.py --live --ab     # also run each case with the full log (no
                                            # triage prefilter) to measure triage's value
-Exit code: non-zero if locate_rate drops below --min-locate (default 0.0, so the
+Exit code: non-zero if detect_rate drops below --min-locate (default 0.0, so the
 offline run never fails CI on model quality — only on harness errors).
 """
 
@@ -67,12 +71,15 @@ def _item_text(item: dict) -> str:
 
 
 def score_case(result: dict, expect: dict) -> dict:
+    """Returns {"status": DETECTED|PARTIAL|MISSED, severity_ok, evidence_ok,
+    dismissal_ok, findings_emitted, detail}."""
     exp = expect.get("expect", {})
     want_subs = [_norm(s) for s in exp.get("subsystem", [])]
     want_sev = [_norm(s) for s in exp.get("severity", [])]
     want_kw = [_norm(k) for k in exp.get("any_keywords", [])]
 
     located = None
+    located_tier = ""
     for tier in ("findings", "inconclusive_concerns"):
         for item in result.get(tier, []) or []:
             if not isinstance(item, dict):
@@ -82,6 +89,7 @@ def score_case(result: dict, expect: dict) -> dict:
             kw_ok = any(k in _item_text(item) for k in want_kw) if want_kw else True
             if sub_ok and kw_ok:
                 located = item
+                located_tier = tier
                 break
         if located:
             break
@@ -103,6 +111,13 @@ def score_case(result: dict, expect: dict) -> dict:
             quotes_passed += 1 if d.get("quote_verified") else 0
     no_halluc = quotes_total == 0 or quotes_passed == quotes_total
 
+    if located is None:
+        status = "MISSED"
+    elif located_tier == "findings" and sev_ok and no_halluc:
+        status = "DETECTED"
+    else:
+        status = "PARTIAL"
+
     # must-not-dismiss: none of these phrases should appear in a verified dismissal
     not_dismissed = True
     for phrase in expect.get("must_not_dismiss", []) or []:
@@ -111,10 +126,12 @@ def score_case(result: dict, expect: dict) -> dict:
             if isinstance(d, dict) and p in _norm(d.get("counter_evidence_quote", "")):
                 not_dismissed = False
     return {
-        "located": located is not None,
+        "status": status,
         "severity_ok": sev_ok,
         "evidence_ok": no_halluc,
         "dismissal_ok": not_dismissed,
+        "findings_emitted": len([x for x in (result.get("findings") or []) if isinstance(x, dict)]),
+        "expected_count": int(expect.get("expected_count", 1)),
         "detail": (located.get("title", "") if located else "NOT LOCATED"),
     }
 
@@ -165,21 +182,30 @@ def run_case(case_dir: Path, client, triage: bool = True) -> dict:
     bundle = RawBundle(dmesg_text=log_text, kernel_version="eval", distro="eval", source="eval")
     result, _ = run_analysis(client, bundle, blocks_text, "", lines, retries=0)
     if not isinstance(result, dict):
-        return {"located": False, "severity_ok": False, "evidence_ok": False,
-                "dismissal_ok": False, "detail": "no valid JSON from model"}
+        return {"status": "MISSED", "severity_ok": False, "evidence_ok": False,
+                "dismissal_ok": False, "findings_emitted": 0, "expected_count": 1,
+                "detail": "no valid JSON from model"}
     verify_result(result, lines)
     return score_case(result, expect)
 
 
 def aggregate(rows: dict[str, dict]) -> dict:
     n = len(rows) or 1
+    det = sum(1 for r in rows.values() if r["status"] == "DETECTED")
+    par = sum(1 for r in rows.values() if r["status"] == "PARTIAL")
+    mis = sum(1 for r in rows.values() if r["status"] == "MISSED")
+    expected_total = sum(r.get("expected_count", 1) for r in rows.values()) or 1
+    emitted = sum(r.get("findings_emitted", 0) for r in rows.values())
     return {
         "cases": len(rows),
-        "locate_rate": round(sum(r["located"] for r in rows.values()) / n, 3),
-        "severity_rate": round(sum(r["severity_ok"] for r in rows.values())
-                               / max(1, sum(r["located"] for r in rows.values())), 3),
+        "detected": det, "partial": par, "missed": mis,
+        "detected_rate": round(det / n, 3),
+        "partial_rate": round(par / n, 3),
+        "missed_rate": round(mis / n, 3),
+        "detect_rate": round((det + par) / n, 3),
         "evidence_rate": round(sum(r["evidence_ok"] for r in rows.values()) / n, 3),
         "dismissal_rate": round(sum(r["dismissal_ok"] for r in rows.values()) / n, 3),
+        "noise_rate": round(emitted / expected_total, 2),
     }
 
 
@@ -189,7 +215,7 @@ def main(argv=None) -> int:
     ap.add_argument("--base-url"); ap.add_argument("--model"); ap.add_argument("--api-key")
     ap.add_argument("--json", action="store_true", help="emit metrics as JSON")
     ap.add_argument("--min-locate", type=float, default=0.0,
-                    help="fail (exit 1) if locate_rate is below this (live runs)")
+                    help="fail (exit 1) if detect_rate is below this (live runs)")
     ap.add_argument("--ab", action="store_true",
                     help="also run every case with triage disabled and compare metrics")
     args = ap.parse_args(argv)
@@ -224,16 +250,16 @@ def main(argv=None) -> int:
             payload["metrics_no_triage"] = ab_metrics
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        print("case            located  severity  evidence  dismissal")
+        print("case            status    severity  evidence  dismissal")
         for name, r in rows.items():
-            print(f"{name:<15} {str(r['located']):<8} {str(r['severity_ok']):<9} "
+            print(f"{name:<15} {r['status']:<9} {str(r['severity_ok']):<9} "
                   f"{str(r['evidence_ok']):<9} {str(r['dismissal_ok']):<10}  {r['detail']}")
         print("\nmetrics:", json.dumps(metrics))
         if ab_metrics is not None:
             print("metrics (no triage):", json.dumps(ab_metrics))
 
-    if args.live and metrics["locate_rate"] < args.min_locate:
-        print(f"FAIL: locate_rate {metrics['locate_rate']} < {args.min_locate}", file=sys.stderr)
+    if args.live and metrics["detect_rate"] < args.min_locate:
+        print(f"FAIL: detect_rate {metrics['detect_rate']} < {args.min_locate}", file=sys.stderr)
         return 1
     return 0
 
