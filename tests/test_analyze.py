@@ -135,3 +135,14 @@ def test_validate_verdict_quote_from_collection():
     v = {"verdict": "confirmed", "evidence": [{"quote": "some collected line"}]}
     assert any("quote" in e for e in validate_verdict(v, ["nothing"]))
     assert validate_verdict(v, ["[x] some collected line"]) == []
+
+
+def test_run_analysis_passes_scan_text_into_prompt():
+    good = json.dumps({"summary": "ok", "findings": [], "inconclusive_concerns": [],
+                       "dismissed_concerns": []})
+    client = FakeClient([good])
+    result, _ = run_analysis(client, RawBundle(dmesg_text=""), "", "", LOG,
+                             scan_text="### $ systemctl --failed\nUNIT1.service loaded failed")
+    assert result["summary"] == "ok"
+    user_msg = client.calls[0][1]["content"]
+    assert "Proactive system scan" in user_msg and "systemctl --failed" in user_msg
