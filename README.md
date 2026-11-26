@@ -203,6 +203,8 @@ The config file lives at `~/.config/dmesg-agent/config.json` (honors `XDG_CONFIG
 .venv/bin/python -m pytest tests/ -q
 ```
 
+CI runs on every push/PR (pytest on Python 3.10/3.12/3.13, offline `dmesg-agent eval`, CLI smoke, sdist/wheel build). Releases: bump `dmesg_agent/__version__` (the single version source — `pyproject.toml` reads it dynamically), tag the commit `vX.Y.Z` and push the tag — the Release workflow guards tag==version, runs tests+eval, and publishes a GitHub Release with the sdist/wheel (PyPI Trusted Publishing is pre-wired but commented until pypi.org is configured).
+
 ## Research notes (local projects and external tools)
 
 **Local (evaluated, not auto-integrated)**:
