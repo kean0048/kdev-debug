@@ -1,4 +1,4 @@
-"""离线日志文件:读入 dmesg/kern.log(支持 .gz 与 stdin)。"""
+"""Offline log file: read dmesg/kern.log (.gz and stdin supported)."""
 
 from __future__ import annotations
 
@@ -19,17 +19,17 @@ def _read(path: str) -> str:
         with opener(path, "rt", errors="replace") as f:
             return f.read()
     except OSError as e:
-        raise CollectError(f"无法读取日志文件 {path}: {e}") from e
+        raise CollectError(f"cannot read log file {path}: {e}") from e
 
 
 def collect_file(path: str, kernel: str = "unknown", distro: str = "unknown") -> RawBundle:
     text = _read(path).strip()
     if not text:
-        raise CollectError(f"日志文件 {path} 为空")
+        raise CollectError(f"log file {path} is empty")
     return RawBundle(
         dmesg_text=text,
         kernel_version=kernel,
         distro=distro,
-        extra_context={"note": "离线日志文件,无实时系统上下文"},
+        extra_context={"note": "offline log file; no live system context available"},
         source=f"file:{path}",
     )

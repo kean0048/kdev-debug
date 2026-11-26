@@ -1,10 +1,11 @@
-"""call trace → 内核源码的确定性关联(借鉴 sashiko:代码即证据)。
+"""Deterministic call-trace → kernel-source correlation (sashiko idea: code is evidence).
 
-模型不猜源码:本模块用 git 树索引把日志里的 `func+0x1a2/0x4d0 [module]` 解析为
-源码函数体与文件近期提交历史,作为可校验的上下文喂给模型。
+The model does not guess source code: this module resolves `func+0x1a2/0x4d0 [module]`
+from the log into the function body and the file's recent commit history using a git-tree
+index, and feeds that as verifiable context to the model.
 
-首次使用会构建函数定义索引(全树 git grep,约 1-3 分钟),缓存到 ~/.cache/dmesg-agent/,
-随内核树 HEAD 失效。
+The first run builds a function-definition index (a whole-tree git grep, roughly 1-3
+minutes), cached under ~/.cache/dmesg-agent/ and invalidated when the tree HEAD changes.
 """
 
 from __future__ import annotations
@@ -16,10 +17,10 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# 调用栈样式:func+0x1a2/0x4d0 可选 [module]
+# call-trace pattern: func+0x1a2/0x4d0 with an optional [module]
 _TRACE_RE = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]+)\+0x[0-9a-fA-F]+/0x[0-9a-fA-F]+(?:\s*\[([a-zA-Z0-9_\-\.]+)\])?")
 
-# 定义行候选(交给 git grep -E):行首即类型/函数名(名可以数字结尾)
+# definition-line candidates (fed to git grep -E): a type/function name at line start (names may end in digits)
 _DEF_GREP_PATTERN = r"^[A-Za-z_][A-Za-z0-9_ *]*\("
 
 CACHE_ROOT = Path(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))) / "dmesg-agent"
@@ -37,11 +38,11 @@ class SrcInfo:
     line: int
     body: str = ""
     history: list[str] = field(default_factory=list)
-    candidates: list[str] = field(default_factory=list)  # 同名多定义时的其他位置
+    candidates: list[str] = field(default_factory=list)  # other definitions of the same name
 
 
 def extract_symbols(log_lines: list[str], cap: int = 12) -> list[tuple[str, str]]:
-    """从日志行提取 (函数, 模块),按出现顺序去重。"""
+    """Extract (function, module) pairs from log lines, deduplicated in order of appearance."""
     seen: dict[str, str] = {}
     for line in log_lines:
         for m in _TRACE_RE.finditer(line):
@@ -62,7 +63,7 @@ def _git(tree: str, *args: str, timeout: int = 120) -> str:
 
 
 def _name_on_line(line: str) -> str | None:
-    """取行中第一个 `(` 之前紧邻的标识符。"""
+    """Take the identifier immediately before the first `(` on the line."""
     idx = line.find("(")
     if idx <= 0:
         return None
@@ -71,7 +72,7 @@ def _name_on_line(line: str) -> str | None:
 
 
 class SrcMap:
-    """内核源码树关联器。tree 为 None 时整体降级为不可用。"""
+    """Kernel source-tree correlator. Degrades to unavailable when tree is None."""
 
     def __init__(self, tree: str | None, cache_dir: Path | None = None):
         self.tree = Path(tree) if tree else None
@@ -91,7 +92,7 @@ class SrcMap:
         v = _git(str(self.tree), "describe", "--tags", timeout=30).strip()
         if v:
             return v
-        # 从 Makefile 读版本
+        # read the version from the Makefile
         try:
             parts = {}
             for line in (self.tree / "Makefile").open():
@@ -109,17 +110,17 @@ class SrcMap:
 
     def build_index(self, progress=None, timeout: int = 420) -> None:
         if not self.available:
-            raise SrcMapError(f"内核源码树不可用: {self.tree}")
+            raise SrcMapError(f"kernel source tree unavailable: {self.tree}")
         cache = self._cache_path()
         if cache.exists():
             self._index = self._load_index(cache)
             return
         if progress:
-            progress("首次使用:构建内核函数索引(全树扫描,约 1-3 分钟,只此一次)...")
+            progress("first run: building the kernel function index (whole-tree scan, ~1-3 minutes, one-time)...")
         out = _git(str(self.tree), "grep", "-I", "-n", "-E", _DEF_GREP_PATTERN, "--", "*.c",
                    timeout=timeout)
         if not out:
-            raise SrcMapError("git grep 索引构建失败(内核树过大或 git 不可用)")
+            raise SrcMapError("git grep index build failed (kernel tree too large or git unavailable)")
         cache.parent.mkdir(parents=True, exist_ok=True)
         tmp = cache.with_suffix(".tmp")
         with tmp.open("w", encoding="utf-8") as f:
@@ -127,7 +128,7 @@ class SrcMap:
                 path, _, rest = raw.partition(":")
                 lineno, _, line = rest.partition(":")
                 if line.rstrip().endswith(";"):
-                    continue  # 声明而非定义
+                    continue  # declaration, not definition
                 name = _name_on_line(line)
                 if name:
                     f.write(f"{name}\t{path}\t{lineno}\n")
@@ -188,9 +189,9 @@ class SrcMap:
 
     def render(self, symbols: list[tuple[str, str]], max_funcs: int = 5,
                body_funcs: int = 3, budget: int = 18_000) -> tuple[str, list[SrcInfo]]:
-        """渲染 source_context 文本;返回 (文本, 成功关联的 SrcInfo 列表)。"""
+        """Render the source_context text; returns (text, list of successfully correlated SrcInfo)."""
         text_parts: list[str] = [
-            f"【内核源码关联】源码树 {self.tree}(版本 {self.version}),以下函数体为源码树原文:",
+            f"[Kernel source correlation] source tree {self.tree} (version {self.version}); the function bodies below are verbatim from the tree:",
         ]
         infos: list[SrcInfo] = []
         used = len(text_parts[0])
@@ -203,14 +204,14 @@ class SrcMap:
                 break
             if info is None:
                 continue
-            body = f"```\n{info.body}\n```" if len(infos) < body_funcs else "(函数体略,见源码位置)"
-            hist = "\n".join(f"  - {h}" for h in info.history) or "  - (无记录)"
+            body = f"```\n{info.body}\n```" if len(infos) < body_funcs else "(body omitted; see the source location)"
+            hist = "\n".join(f"  - {h}" for h in info.history) or "  - (no records)"
             chunk = (f"### {func}"
-                     + (f" (模块 {module})" if module else "")
-                     + f"\n位置:{info.file}:{info.line}"
-                     + (f"\n同名定义还有:{', '.join(info.candidates)}" if info.candidates else "")
-                     + f"\n{body}\n该文件最近提交:\n{hist}"
-                     + (f"\n(截断)" if len(body) > 4000 else ""))
+                     + (f" (module {module})" if module else "")
+                     + f"\nLocation: {info.file}:{info.line}"
+                     + (f"\nOther same-name definitions: {', '.join(info.candidates)}" if info.candidates else "")
+                     + f"\n{body}\nRecent commits touching this file:\n{hist}"
+                     + ("\n(truncated)" if len(body) > 4000 else ""))
             if used + len(chunk) > budget:
                 break
             text_parts.append(chunk)

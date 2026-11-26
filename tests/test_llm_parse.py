@@ -10,14 +10,14 @@ def test_fenced():
 
 
 def test_preamble():
-    assert parse_json_response('好的,结果如下:\n{"summary": "ok"}')["summary"] == "ok"
+    assert parse_json_response('Sure, here is the result:\n{"summary": "ok"}')["summary"] == "ok"
 
 
 def test_garbage():
-    assert parse_json_response("我不确定") is None
+    assert parse_json_response("I am not sure") is None
     assert parse_json_response("") is None
     assert parse_json_response("[1,2") is None
-    # 可修复的截断会带 flag,而不是被丢弃
+    # a repairable truncation carries a flag instead of being dropped
     r = parse_json_response('{"broken": ')
     assert r == {"broken": None, "_repaired_truncation": True}
 

@@ -14,7 +14,7 @@ def test_signatures_hit():
     blocks = find_blocks(_lines())
     names = {n for b in blocks for n in b.names}
     for expected in ["oom", "lockup", "hung-task", "gpu-amd", "io-error", "nvme", "fs-error", "security"]:
-        assert expected in names, f"缺少签名 {expected}, 实际: {names}"
+        assert expected in names, f"missing signature {expected}, got: {names}"
 
 
 def test_block_line_numbers_are_real():

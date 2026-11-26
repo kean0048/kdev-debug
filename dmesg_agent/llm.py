@@ -1,4 +1,4 @@
-"""OpenAI 兼容 /v1/chat/completions 客户端 + JSON 容错解析。"""
+"""OpenAI-compatible /v1/chat/completions client + fault-tolerant JSON parsing."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ class Client:
             resp.raise_for_status()
             return resp.json()
         except requests.RequestException as e:
-            raise LLMError(f"无法连接 LLM 服务 {self.cfg.base_url}: {e}") from e
+            raise LLMError(f"cannot reach the LLM service at {self.cfg.base_url}: {e}") from e
 
     def list_models(self) -> list[str]:
         data = self._get("/v1/models")
@@ -43,7 +43,7 @@ class Client:
             return self.cfg.model
         models = self.list_models()
         if not models:
-            raise LLMError(f"{self.cfg.base_url} 上没有可用模型")
+            raise LLMError(f"no usable model available at {self.cfg.base_url}")
         return models[0]
 
     def chat(self, messages: list[dict], retries: int = 2) -> str:
@@ -68,14 +68,14 @@ class Client:
                 last_err = e
                 if attempt < retries:
                     time.sleep(2 * (attempt + 1))
-        raise LLMError(f"LLM 调用失败: {last_err}")
+        raise LLMError(f"LLM call failed: {last_err}")
 
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
 
 def parse_json_response(text: str) -> dict | None:
-    """容错解析:直接 parse → 剥代码围栏 → 截取首尾大括号。全部失败返回 None。"""
+    """Tolerant parsing: direct parse → strip code fences → slice outermost braces. Returns None if all fail."""
     if not text:
         return None
     text = text.strip()
@@ -100,7 +100,7 @@ def parse_json_response(text: str) -> dict | None:
 
 
 def _repair_truncated(s: str) -> str | None:
-    """输出被 max_tokens 截断时,补全引号与括号再试一次。"""
+    """When output was cut off by max_tokens, close open quotes/brackets and retry once."""
     stack: list[str] = []
     in_str = esc = False
     for ch in s:

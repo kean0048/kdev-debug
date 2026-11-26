@@ -1,4 +1,4 @@
-"""采集结果的统一容器与共用采集管道(经 Executor 执行)。"""
+"""Unified container for collected data plus the shared collection pipeline (run via an Executor)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ class RawBundle:
     source: str = "file"
 
 
-# (context key, 命令) —— 缺失命令容错跳过
+# (context key, command) — missing commands are tolerated and skipped
 CONTEXT_COMMANDS: list[tuple[str, str]] = [
     ("kernel_version", "uname -r"),
     ("distro", "cat /etc/os-release | head -5"),
@@ -49,7 +49,7 @@ def parse_os_release(text: str) -> str:
 
 
 def collect_via(executor, boot: str = "now") -> RawBundle:
-    """经执行器采集内核日志与系统上下文(local/ssh 共用)。"""
+    """Collect the kernel log and system context via an executor (shared by local/ssh)."""
     cmds = _DMESG_CMDS.get(boot, _DMESG_CMDS["now"])
     dmesg_text = None
     for _label, cmd in cmds:
@@ -59,11 +59,11 @@ def collect_via(executor, boot: str = "now") -> RawBundle:
             break
     if not dmesg_text:
         hint = (
-            "读取上一次启动的日志需要 journalctl(建议 sudo 运行)"
+            "reading the previous boot's log requires journalctl (run with sudo)"
             if boot == "previous"
-            else "读取内核日志可能需要 root 权限(sudo dmesg),或用 --file 分析已导出的日志文件"
+            else "reading the kernel log may need root (sudo dmesg); or use --file to analyze an exported log"
         )
-        raise CollectError(f"无法获取内核日志:{hint}")
+        raise CollectError(f"could not obtain the kernel log: {hint}")
 
     extra: dict[str, str] = {}
     kernel_version = "unknown"

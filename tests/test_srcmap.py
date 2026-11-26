@@ -66,7 +66,7 @@ def test_lookup_body_history(tmp_path):
     assert info.file.endswith("fs/ext4/inode.c")
     assert "writeback_control" in info.body and info.body.rstrip().endswith("}")
     assert any("fix ret init" in h for h in info.history)
-    # helper 也在索引里
+    # the helper is in the index too
     assert sm.lookup("ext4_writepages_helper") is not None
 
 
@@ -82,5 +82,5 @@ def test_render(tmp_path):
     tree = make_tree(tmp_path)
     sm = SrcMap(str(tree), cache_dir=tmp_path / "cache")
     text, infos = sm.render([("ext4_writepages", "ext4"), ("wb_workfn", "")])
-    assert "fs/ext4/inode.c" in text and "最近提交" in text
+    assert "fs/ext4/inode.c" in text and "Recent commits" in text
     assert len(infos) == 2

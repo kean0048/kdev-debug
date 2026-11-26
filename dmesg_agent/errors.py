@@ -1,4 +1,4 @@
-"""公共异常,避免 collectors 与 executors 循环导入。"""
+"""Shared exception, avoiding a circular import between collectors and executors."""
 
 
 class CollectError(Exception):

@@ -15,13 +15,13 @@ NVME_QUOTE = "nvme nvme0: I/O 12 (QID 1) Q 0x0 timeout, reset controller"
 def good_result():
     return {
         "summary": "ok",
-        "findings": [{"title": "OOM", "subsystem": "内存", "severity": "high",
+        "findings": [{"title": "OOM", "subsystem": "memory", "severity": "high",
                       "evidence": [{"line": 1, "quote": OOM_QUOTE, "why": "w"}]}],
-        "inconclusive_concerns": [{"title": "NVMe 故障?", "subsystem": "存储", "estimated_severity": "high",
-                                   "signal_reason": "timeout", "hypothesis": "ssd 坏",
+        "inconclusive_concerns": [{"title": "NVMe failure?", "subsystem": "storage", "estimated_severity": "high",
+                                   "signal_reason": "timeout", "hypothesis": "failing ssd",
                                    "evidence": [{"line": 2, "quote": NVME_QUOTE, "why": "w"}],
-                                   "verification_question": "需要 smartctl 看介质错误"}],
-        "dismissed_concerns": [{"title": "i8042", "counter_evidence_quote": OOM_QUOTE, "why": "无关噪音"}],
+                                   "verification_question": "need smartctl to check media errors"}],
+        "dismissed_concerns": [{"title": "i8042", "counter_evidence_quote": OOM_QUOTE, "why": "irrelevant noise"}],
     }
 
 
@@ -75,7 +75,7 @@ def test_validate_needs_verification_question():
 def test_validate_dismissed_needs_counter_evidence():
     r = good_result()
     r["dismissed_concerns"][0]["counter_evidence_quote"] = "no such line"
-    assert any("反证" in e for e in validate_analysis(r, LOG))
+    assert any("counter_evidence_quote" in e for e in validate_analysis(r, LOG))
 
 
 def test_run_analysis_retries_with_feedback():
@@ -91,13 +91,13 @@ def test_run_analysis_retries_with_feedback():
 def test_deep_dive_confirms_concern():
     collected_out = "Reallocated_Sector_Ct   142\nCurrent_Pending_Sector 8"
     verdict = {
-        "verdict": "confirmed", "reason": "SMART 显示坏道",
-        "updated_root_cause": "SSD 介质劣化", "updated_severity": "critical",
-        "evidence": [{"source": "smartctl", "quote": "Reallocated_Sector_Ct   142", "why": "坏道增长"}],
-        "next_steps": ["备份换盘"],
+        "verdict": "confirmed", "reason": "SMART shows reallocated sectors",
+        "updated_root_cause": "SSD media degradation", "updated_severity": "critical",
+        "evidence": [{"source": "smartctl", "quote": "Reallocated_Sector_Ct   142", "why": "growing reallocated count"}],
+        "next_steps": ["back up and replace the disk"],
     }
     r = good_result()
-    # deep 会按 concern 文本匹配 storage playbook,伪造其命令输出
+    # deep matches the storage playbook from the concern text; fake its command outputs
     from dmesg_agent.playbooks import DEEP_BY_SUBSYSTEM
     outs = {c.cmd: (collected_out if "smartctl" in c.cmd else "") for c in DEEP_BY_SUBSYSTEM["storage"]}
     ex = FakeExecutor(outs)
@@ -111,8 +111,8 @@ def test_deep_dive_confirms_concern():
 
 
 def test_deep_dive_dismiss():
-    verdict = {"verdict": "dismissed", "reason": "计数全零,盘健康",
-               "evidence": [{"source": "c", "quote": "Reallocated 0", "why": "无坏道"}],
+    verdict = {"verdict": "dismissed", "reason": "all counters zero, disk healthy",
+               "evidence": [{"source": "c", "quote": "Reallocated 0", "why": "no bad sectors"}],
                "next_steps": []}
     from dmesg_agent.playbooks import DEEP_BY_SUBSYSTEM
     outs = {c.cmd: ("Reallocated 0\n" if "smartctl" in c.cmd else "") for c in DEEP_BY_SUBSYSTEM["storage"]}
@@ -120,7 +120,7 @@ def test_deep_dive_dismiss():
     client = FakeClient([json.dumps(verdict)])
     result, _ = deep_dive(client, FakeExecutor(outs), r, LOG, RawBundle(dmesg_text="", source="fake"))
     assert result["dismissed_concerns"][-1]["deep_dismissed"] is True
-    assert not any(c.get("title") == "NVMe 故障?" for c in result["inconclusive_concerns"])
+    assert not any(c.get("title") == "NVMe failure?" for c in result["inconclusive_concerns"])
 
 
 def test_deep_dive_bad_verdict_retries_then_fails_gracefully():
@@ -128,7 +128,7 @@ def test_deep_dive_bad_verdict_retries_then_fails_gracefully():
     client = FakeClient(["garbage", "still garbage"])
     result, _ = deep_dive(client, FakeExecutor({}), r, LOG, RawBundle(dmesg_text="", source="fake"))
     assert result["deep_dive_summary"]["skipped"] == 1
-    assert len(result["inconclusive_concerns"]) == 1  # 保留,不丢
+    assert len(result["inconclusive_concerns"]) == 1  # kept, not dropped
 
 
 def test_validate_verdict_quote_from_collection():

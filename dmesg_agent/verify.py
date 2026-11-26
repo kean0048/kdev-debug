@@ -1,11 +1,11 @@
-"""证据校验:AI 引用的日志行必须逐字存在于原始日志中,防止幻觉。"""
+"""Evidence verification: every log line the AI quotes must exist verbatim in the original log, to prevent hallucination."""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 
-# 去掉行首的 [timestamp] / [drm] 类方括号前缀
+# strip leading bracketed prefixes such as [timestamp] / [drm]
 _TS_RE = re.compile(r"^\s*(\[[^\]]*\]\s*)+")
 
 
@@ -13,7 +13,7 @@ _TS_RE = re.compile(r"^\s*(\[[^\]]*\]\s*)+")
 class VerifySummary:
     total: int = 0
     passed: int = 0
-    line_mismatch: int = 0  # 内容找到但行号对不上
+    line_mismatch: int = 0  # content found but the line number did not match
 
     @property
     def rate(self) -> str:
@@ -30,14 +30,15 @@ def _match(quote_norm: str, line_norm: str) -> bool:
         return False
     if quote_norm == line_norm:
         return True
-    # 引用可能被模型截断/补全,允许单向包含(过短的引用必须完全相等,避免误判)
+    # the model may truncate/extend a quote, so allow one-way containment
+    # (very short quotes must match exactly, to avoid false positives)
     if len(quote_norm) >= 12:
         return quote_norm in line_norm or line_norm in quote_norm
     return False
 
 
 def verify_result(result: dict, log_lines: list[str]) -> VerifySummary:
-    """就地修改 result:为每条 evidence 标注 verified / actual_line。"""
+    """Mutates result in place: tags each evidence entry with verified / actual_line."""
     summary = VerifySummary()
     norm_all = [normalize(l) for l in log_lines]
     for finding in result.get("findings", []):
@@ -52,7 +53,7 @@ def verify_result(result: dict, log_lines: list[str]) -> VerifySummary:
             claimed = ev.get("line")
             found_at: int | None = None
 
-            # 先看声称行号 ±1 的窗口
+            # first check a ±1 window around the claimed line number
             try:
                 c = int(claimed)
                 window = range(max(1, c - 1), min(len(norm_all), c + 1) + 1)

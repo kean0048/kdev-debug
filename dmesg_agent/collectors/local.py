@@ -1,4 +1,4 @@
-"""本机采集:LocalExecutor + 共用管道。"""
+"""Local collection: LocalExecutor + the shared pipeline."""
 
 from __future__ import annotations
 

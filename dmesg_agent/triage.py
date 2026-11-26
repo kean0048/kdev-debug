@@ -1,17 +1,18 @@
-"""预过滤:按已知错误签名从整份日志中切出可疑片段,降低噪音与 token 消耗。"""
+"""Prefilter: cut suspicious segments out of the whole log using known error signatures,
+reducing noise and token usage."""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
 
-CONTEXT = 3  # 命中行前后保留的行数
+CONTEXT = 3  # lines of context kept around each hit
 
 
 @dataclass
 class Block:
-    start: int  # 1-based,含
-    end: int    # 1-based,含
+    start: int  # 1-based, inclusive
+    end: int    # 1-based, inclusive
     names: list[str] = field(default_factory=list)
 
 
@@ -44,7 +45,7 @@ SIGNATURES: list[tuple[str, re.Pattern]] = [
         ("firmware", r"(Direct-)?[Ff]irmware load.*(?:fail|error)|failed to load"),
         ("driver", r"driver .*(?:failed|error)|(?:probe|init).*(?:failed|error)"),
         ("power", r"(suspend|resume|hibernate).*fail|ACPI.*error"),
-        # syzkaller pkg/report 风格的补充签名
+        # additional signatures in the style of syzkaller pkg/report
         ("lockdep", r"circular locking|deadlock|inconsistent lock state|already held|trying to lock"),
         ("rcu-stall", r"rcu.*stall|self-detected stall"),
         ("sanitizer", r"\bUBSAN\b|\bKFENCE\b|use-after-free|slab.*corrupt|list.*corrupted|refcount_t:|BUG: (MAX_|Kmap)"),
@@ -58,14 +59,14 @@ GENERIC_LEVEL = re.compile(r"\b(err|error|fail|failed|failure|fault|crit|alert|e
 
 
 def find_blocks(lines: list[str]) -> list[Block]:
-    """返回按行号排序、已合并的可疑片段。若无任何命中,返回覆盖全文的单个 block。"""
+    """Return suspicious segments sorted by line number and merged. If nothing matches, return a single whole-log block."""
     intervals: list[list] = []  # [start, end, [names]]
     for i, line in enumerate(lines):
         names = [name for name, pat in SIGNATURES if pat.search(line)]
         if names:
             _push(intervals, max(0, i - CONTEXT), min(len(lines) - 1, i + CONTEXT), names)
     if not intervals:
-        # 兜底:级别词粗筛;仍没有则整份日志交给模型
+        # fallback: coarse level-word screen; if still nothing, hand the whole log to the model
         for i, line in enumerate(lines):
             if GENERIC_LEVEL.search(line):
                 _push(intervals, max(0, i - CONTEXT), min(len(lines) - 1, i + CONTEXT), ["level-keyword"])
@@ -86,7 +87,7 @@ def find_blocks(lines: list[str]) -> list[Block]:
 
 def _push(intervals: list, start: int, end: int, names: list[str]) -> None:
     for iv in intervals:
-        if start <= iv[1] and end >= iv[0]:  # 重叠
+        if start <= iv[1] and end >= iv[0]:  # overlap
             iv[0], iv[1] = min(iv[0], start), max(iv[1], end)
             for n in names:
                 if n not in iv[2]:
@@ -96,15 +97,15 @@ def _push(intervals: list, start: int, end: int, names: list[str]) -> None:
 
 
 def render_blocks(lines: list[str], blocks: list[Block], max_chars: int = 900_000) -> str:
-    """渲染为带真实行号的文本;超长时按 block 顺序截断并标注。"""
+    """Render as text with real line numbers; truncate by block order and note it if too long."""
     parts: list[str] = []
     total = 0
     for b in blocks:
-        header = f"### 片段 L{b.start}-{b.end} [{', '.join(b.names)}]"
+        header = f"### Segment L{b.start}-{b.end} [{', '.join(b.names)}]"
         body = "\n".join(f"{n}: {lines[n - 1]}" for n in range(b.start, b.end + 1))
         chunk = f"{header}\n{body}\n"
         if total + len(chunk) > max_chars:
-            parts.append(f"\n... 日志过长,已省略后续 {len(blocks) - len(parts)} 个片段 ...")
+            parts.append(f"\n... log too long; omitted the remaining {len(blocks) - len(parts)} segments ...")
             break
         parts.append(chunk)
         total += len(chunk)

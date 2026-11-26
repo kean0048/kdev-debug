@@ -1,4 +1,4 @@
-"""sudo 密码获取:终端隐藏输入 / 桌面弹窗(zenity、kdialog),进程内缓存,绝不落盘。"""
+"""sudo password acquisition: hidden terminal input / desktop dialog (zenity, kdialog), cached in-process, never written to disk."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ MODES = ("auto", "terminal", "gui", "none")
 class PassResolver:
     def __init__(self, mode: str = "auto"):
         if mode not in MODES:
-            raise ValueError(f"askpass 模式须为 {MODES}")
+            raise ValueError(f"askpass mode must be one of {MODES}")
         self.mode = mode
         self._cached: str | None = None
 
@@ -21,7 +21,7 @@ class PassResolver:
     def has_password(self) -> bool:
         return self._cached is not None
 
-    def get(self, prompt: str = "需要 root 权限采集日志") -> str | None:
+    def get(self, prompt: str = "root privileges are required to collect logs") -> str | None:
         if self._cached is not None:
             return self._cached
         if self.mode == "none":
@@ -44,7 +44,7 @@ class PassResolver:
         if not sys.stdin.isatty():
             return None
         try:
-            return getpass.getpass(f"[dmesg-agent] {prompt}(回车跳过): ") or None
+            return getpass.getpass(f"[dmesg-agent] {prompt} (Enter to skip): ") or None
         except (EOFError, KeyboardInterrupt):
             print(file=sys.stderr)
             return None
