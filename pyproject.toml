@@ -7,11 +7,12 @@ name = "dmesg-agent"
 version = "0.1.0"
 description = "类 sashiko 的 dmesg AI 诊断 agent:定位内核/系统问题并给出可验证的证据链"
 requires-python = ">=3.10"
-license = "MIT"
+license = "Apache-2.0"
 classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Topic :: System :: Systems Administration",
