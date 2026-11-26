@@ -1,0 +1,10 @@
+{
+  "id": "nvme-io-error",
+  "description": "NVMe I/O timeout with a medium error surfacing as ext4 errors",
+  "expect": {
+    "subsystem": ["storage"],
+    "severity": ["high", "critical"],
+    "any_keywords": ["nvme", "medium error", "storage", "disk", "timeout"]
+  },
+  "must_not_dismiss": []
+}

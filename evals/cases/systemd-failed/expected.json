@@ -1,0 +1,10 @@
+{
+  "id": "systemd-failed",
+  "description": "a systemd unit (snapd) failed to start and exited non-zero",
+  "expect": {
+    "subsystem": ["service", "systemd", "userspace"],
+    "severity": ["medium", "high", "low"],
+    "any_keywords": ["snapd", "service", "failed", "systemd"]
+  },
+  "must_not_dismiss": []
+}

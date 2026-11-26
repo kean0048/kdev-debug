@@ -1,0 +1,10 @@
+{
+  "id": "gpu-reset",
+  "description": "amdgpu ring timeout triggering a GPU reset",
+  "expect": {
+    "subsystem": ["gpu"],
+    "severity": ["high", "medium"],
+    "any_keywords": ["gpu", "ring", "amdgpu", "reset"]
+  },
+  "must_not_dismiss": []
+}

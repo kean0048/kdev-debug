@@ -1,0 +1,4 @@
+[12000.100000] nvme nvme0: I/O 8 (QID 3) Q 0x0 timeout, reset controller
+[12000.900000] blk_update_request: critical medium error, dev nvme0n1, sector 98765432 op 0x0:(READ) flags 0x0 phys_seg 1 prio class 0
+[12001.000000] EXT4-fs error (device nvme0n1p2): ext4_lookup:1895: inode #777: comm ls: deleted inode referenced: 999999
+[12005.500000] nvme nvme0: Abort status: 0x0

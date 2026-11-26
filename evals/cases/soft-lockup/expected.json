@@ -1,0 +1,10 @@
+{
+  "id": "soft-lockup",
+  "description": "soft lockup on CPU#5 spinning in a lock path",
+  "expect": {
+    "subsystem": ["locking", "scheduler"],
+    "severity": ["high", "critical"],
+    "any_keywords": ["lockup", "stuck", "spin"]
+  },
+  "must_not_dismiss": []
+}

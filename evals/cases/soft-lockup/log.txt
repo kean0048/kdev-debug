@@ -1,0 +1,8 @@
+[ 9876.500000] watchdog: BUG: soft lockup - CPU#5 stuck for 22s! [kworker/5:1:3344]
+[ 9876.500030] Modules linked in: e1000e
+[ 9876.500060] CPU: 5 UID: 0 PID: 3344 Comm: kworker/5:1 Not tainted 6.12.11+ #1
+[ 9876.500090] Hardware name: Test Vendor Test Model
+[ 9876.500100] RIP: 0010:native_queued_spin_lock_slowpath+0x1c3/0x200
+[ 9876.500120] Call Trace:
+[ 9876.500130]  _raw_spin_lock+0x1e/0x30
+[ 9876.500140]  wb_workfn+0x100/0x5a0

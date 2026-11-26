@@ -1,0 +1,10 @@
+{
+  "id": "oom",
+  "description": "repeated OOM kills including a cgroup limit kill",
+  "expect": {
+    "subsystem": ["memory"],
+    "severity": ["high", "critical"],
+    "any_keywords": ["oom", "out of memory", "killed process", "cgroup"]
+  },
+  "must_not_dismiss": ["out of memory"]
+}

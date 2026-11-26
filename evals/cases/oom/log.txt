@@ -1,0 +1,8 @@
+[    0.000000] Linux version 6.12.11+ (build@host) #1 SMP
+[ 1801.111000] chrome invoked oom-killer: gfp_mask=0x140cca(GFP_HIGHUSER_MOVABLE), order=0
+[ 1801.111050] CPU: 2 UID: 1000 PID: 4120 Comm: chrome Tainted: G        W   6.12.11+
+[ 1801.112000] Out of memory: Killed process 4120 (chrome) total-vm:16777216kB, anon-rss:12582912kB, file-rss:0kB, shmem-rss:0kB, UID:1000
+[ 1801.112050] oom_kill_process: 512 callbacks suppressed
+[ 1801.113000] Memory cgroup out of memory: Killed process 4155 (node) total-vm:8388608kB, anon-rss:4194304kB
+[ 1801.200000] Out of memory: Killed process 4201 (java) total-vm:12582912kB, anon-rss:9437184kB
+[ 1801.300000] oom_reaper: reaped process 4120 (chrome), now anon-rss:0kB

@@ -1,0 +1,5 @@
+[  412.555000] amdgpu 0000:03:00.0: amdgpu: GPU reset(1) began
+[  412.560000] amdgpu 0000:03:00.0: amdgpu: ring gfx_0.0.0 timeout, info request on ring0
+[  412.560100] [drm:amdgpu_job_timedout [amdgpu]] *ERROR* ring gfx_0.0.0 timeout, but soft job recovered
+[  413.001000] amdgpu 0000:03:00.0: amdgpu: GPU reset(1) succeeded
+[  500.100000] audit: type=1400 msg=audit(1700000000.100:22): apparmor="DENIED" operation="open" profile="/usr/bin/foo" name="/etc/secret"

@@ -1,0 +1,4 @@
+Nov 26 09:00:01 host systemd[1]: snapd.service: Main process exited, code=exited, status=1/FAILURE
+Nov 26 09:00:01 host systemd[1]: Failed to start Snap Daemon.
+Nov 26 09:00:01 host systemd[1]: snapd.service: Failed with result 'exit-code'.
+Nov 26 09:00:05 host kernel: audit: type=1130 audit(1764147605.1:55): pid=1 uid=0 auid=4294967295 msg='unit=snapd comm="systemd" result=failed'
