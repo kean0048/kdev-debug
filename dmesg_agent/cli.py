@@ -47,6 +47,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=22)
     p.add_argument("--user", help="SSH user name (when --ssh has no user@ prefix)")
     p.add_argument("--key", help="path to an SSH private key")
+    p.add_argument("--ssh-password", action="store_true",
+                   help="authenticate SSH login with a password (prompted, hidden; "
+                        "or set DMESG_AGENT_SSH_PASSWORD). Without it, keys/agent are used.")
     p.add_argument("--kernel", default="unknown", help="kernel version the offline log came from")
     p.add_argument("--distro", default="unknown", help="distro the offline log came from")
     p.add_argument("--no-triage", action="store_true", help="skip prefiltering; send the whole log to the model")
@@ -154,7 +157,14 @@ def _make_executor(args, resolver: PassResolver) -> Executor | None:
             user, host = args.user, args.ssh
         if not user:
             raise CollectError("SSH target must be user@host, or pass --user")
-        return SSHExecutor(host, user, port=args.port, key_filename=args.key, resolver=resolver)
+        ssh_password = None
+        if args.ssh_password:
+            import getpass
+            ssh_password = os.environ.get("DMESG_AGENT_SSH_PASSWORD")
+            if not ssh_password:
+                ssh_password = getpass.getpass(f"SSH password for {user}@{host}: ")
+        return SSHExecutor(host, user, port=args.port, key_filename=args.key,
+                           resolver=resolver, password=ssh_password)
     return LocalExecutor(resolver)
 
 

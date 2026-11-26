@@ -97,7 +97,8 @@ class SSHExecutor(Executor):
     can_collect = True
 
     def __init__(self, host: str, user: str, port: int = 22,
-                 key_filename: str | None = None, resolver: PassResolver | None = None):
+                 key_filename: str | None = None, resolver: PassResolver | None = None,
+                 password: str | None = None):
         try:
             import paramiko
         except ImportError as e:
@@ -107,8 +108,19 @@ class SSHExecutor(Executor):
         self._client.load_system_host_keys()
         self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
-            self._client.connect(host, port=port, username=user,
-                                 key_filename=key_filename, allow_agent=True, look_for_keys=True)
+            if password is not None:
+                # password auth explicitly requested: skip keys/agent so a server
+                # accepting both still uses the provided password
+                self._client.connect(host, port=port, username=user, password=password,
+                                     allow_agent=False, look_for_keys=False)
+            else:
+                self._client.connect(host, port=port, username=user,
+                                     key_filename=key_filename, allow_agent=True, look_for_keys=True)
+        except paramiko.ssh_exception.AuthenticationException as e:
+            from .errors import CollectError
+            hint = ("— the provided password was rejected" if password is not None else
+                    "; the server may require a password (try --ssh-password) or a key (--key)")
+            raise CollectError(f"SSH authentication failed for {user}@{host}:{port} {hint}") from e
         except Exception as e:
             from .errors import CollectError
             raise CollectError(f"SSH connection to {user}@{host}:{port} failed: {e}") from e

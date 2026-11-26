@@ -31,6 +31,8 @@ dmesg-agent --boot previous
 
 # 3) Remote over SSH (also full pipeline; deep verification uses sudo on the remote)
 dmesg-agent --ssh user@10.0.0.5 --key ~/.ssh/id_ed25519
+dmesg-agent --ssh user@10.0.0.5 --ssh-password   # password login: prompted (hidden),
+                                                 # or set DMESG_AGENT_SSH_PASSWORD
 ```
 
 When deep verification hits a collection command that needs root: it asks for the password via hidden terminal input; with no terminal but a desktop session available it falls back to a `zenity`/`kdialog` password dialog; `--askpass none` disables this (those commands are skipped). The password is kept in process memory only.
