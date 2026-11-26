@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 from . import __version__
 from .analyze import deep_dive, run_analysis
@@ -209,11 +210,30 @@ def _make_executor(args, resolver: PassResolver) -> Executor | None:
     return LocalExecutor(resolver)
 
 
+def _eval_main(argv: list[str]) -> int:
+    """`dmesg-agent eval ...` → the benchmark harness in evals/run_eval.py
+    (sashiko ships `sashiko benchmark` the same way: same binary, dev-only
+    subcommand)."""
+    runner = Path(__file__).resolve().parent.parent / "evals" / "run_eval.py"
+    if not runner.is_file():
+        print("error: eval harness not found next to the package "
+              "(present in a git checkout; missing in an installed wheel)",
+              file=sys.stderr)
+        return 2
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("dmesg_agent_eval", runner)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.main(argv)
+
+
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
     if argv and argv[0] == "config":
         return _config_main(argv[1:])
+    if argv and argv[0] == "eval":
+        return _eval_main(argv[1:])
     args = build_parser().parse_args(argv)
     log = _Log(args.verbose)
     resolver = PassResolver(args.askpass)

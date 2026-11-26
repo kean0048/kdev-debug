@@ -81,10 +81,15 @@ prefetch/deep playbooks, and triage learned their signatures
 known-answer cases scored automatically.
 
 ```bash
-python evals/run_eval.py            # offline self-test (stub client; also runs under pytest)
-python evals/run_eval.py --live --min-locate 0.8   # real endpoint, fail CI below 80% locate
-python evals/run_eval.py --live --json             # machine-readable metrics
+dmesg-agent eval                    # offline self-test (stub client; also runs under pytest)
+dmesg-agent eval --live --min-locate 0.8   # real endpoint, fail CI below 80% detect
+dmesg-agent eval --live --json               # machine-readable metrics
+python evals/run_eval.py ...        # the same harness directly (git checkout only)
 ```
+
+The subcommand loads `evals/run_eval.py` from the checkout next to the
+package — same binary, dev-only entry, like `sashiko benchmark`. In an
+installed wheel without the checkout it reports the harness is absent.
 
 A case = `evals/cases/<name>/{log.txt, expected.json}` (expected subsystem,
 severity, keywords; optional `must_not_dismiss`, `expected_count`). Scoring
