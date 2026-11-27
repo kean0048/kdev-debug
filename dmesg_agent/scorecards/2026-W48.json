@@ -1,0 +1,267 @@
+{
+  "week": "2026-W48",
+  "date": "2026-11-27",
+  "version": "0.4.0",
+  "git_head": "1275023",
+  "rubric_version": 1,
+  "scoring_start": "2026-W48",
+  "weights": {
+    "architecture": 0.35,
+    "accuracy": 0.45,
+    "improvement": 0.2
+  },
+  "metrics": {
+    "version": "0.4.0",
+    "week": "2026-W48",
+    "date": "2026-11-27",
+    "git_head": "1275023",
+    "modules": 22,
+    "module_loc": 3258,
+    "largest_module": "dmesg_agent/scorecard.py",
+    "largest_module_lines": 487,
+    "docstring_fraction": 0.95,
+    "annotations_fraction": 0.86,
+    "test_files": 15,
+    "test_functions": 105,
+    "runtime_deps": 1,
+    "has_readme": true,
+    "has_invariants": true,
+    "has_ci": true,
+    "eval_cases": 5,
+    "eval_categories": [
+      "gpu",
+      "locking",
+      "memory",
+      "service",
+      "storage"
+    ],
+    "expected_bugs": 5
+  },
+  "sections": {
+    "architecture": {
+      "score": 10.0,
+      "max": 10.0,
+      "items": [
+        {
+          "item": "modularity (module count)",
+          "points": 1.5,
+          "max": 1.5,
+          "evidence": "22 modules, 3258 lines"
+        },
+        {
+          "item": "largest module stays reviewable",
+          "points": 1.0,
+          "max": 1.0,
+          "evidence": "dmesg_agent/scorecard.py = 487 lines (cap 1200)"
+        },
+        {
+          "item": "test-file density",
+          "points": 1.0,
+          "max": 1.0,
+          "evidence": "15 test files / 22 modules"
+        },
+        {
+          "item": "test functions",
+          "points": 1.5,
+          "max": 1.5,
+          "evidence": "105 test functions (full credit at 60)"
+        },
+        {
+          "item": "docs",
+          "points": 1.0,
+          "max": 1.0,
+          "evidence": "README=True, invariant docs (CLAUDE.md Architecture)=True"
+        },
+        {
+          "item": "module docstrings",
+          "points": 0.5,
+          "max": 0.5,
+          "evidence": "95% of modules documented"
+        },
+        {
+          "item": "CI runs tests",
+          "points": 1.5,
+          "max": 1.5,
+          "evidence": "CI-with-pytest=True"
+        },
+        {
+          "item": "dependency hygiene",
+          "points": 1.0,
+          "max": 1.0,
+          "evidence": "1 runtime dependencies"
+        },
+        {
+          "item": "future annotations",
+          "points": 1.0,
+          "max": 1.0,
+          "evidence": "86% of modules"
+        }
+      ]
+    },
+    "accuracy": {
+      "score": 5.0,
+      "max": 10.0,
+      "items": [
+        {
+          "item": "eval category coverage",
+          "points": 3.0,
+          "max": 3.0,
+          "evidence": "5 categories: gpu, locking, memory, service, storage"
+        },
+        {
+          "item": "eval case count",
+          "points": 1.0,
+          "max": 2.0,
+          "evidence": "5 known-answer cases (full credit at 10)"
+        },
+        {
+          "item": "harness integrity",
+          "points": 1.0,
+          "max": 1.0,
+          "evidence": "offline harness produced parseable metrics"
+        },
+        {
+          "item": "live-model accuracy",
+          "points": 0.0,
+          "max": 4.0,
+          "evidence": "live eval not run this week — accuracy above the offline harness is unmeasured (rerun with --live to record it)"
+        }
+      ]
+    },
+    "improvement": {
+      "score": 6.5,
+      "max": 10.0,
+      "items": [
+        {
+          "item": "commits since baseline",
+          "points": 3.0,
+          "max": 3.0,
+          "evidence": "20 commit(s) since repository start be99392 (baseline week)"
+        },
+        {
+          "item": "code growth",
+          "points": 2.0,
+          "max": 2.0,
+          "evidence": "6089 insertions across 56 file(s)"
+        },
+        {
+          "item": "test growth",
+          "points": 0.0,
+          "max": 2.0,
+          "evidence": "baseline week (deltas start with the next scorecard)"
+        },
+        {
+          "item": "eval-case growth",
+          "points": 0.0,
+          "max": 1.5,
+          "evidence": "baseline week (deltas start with the next scorecard)"
+        },
+        {
+          "item": "tests pass",
+          "points": 1.5,
+          "max": 1.5,
+          "evidence": "pytest passed"
+        }
+      ]
+    }
+  },
+  "overall": 7.0,
+  "grade": "C",
+  "eval": {
+    "mode": "stub",
+    "ran": true,
+    "metrics": {
+      "cases": 5,
+      "detected": 5,
+      "partial": 0,
+      "missed": 0,
+      "detected_rate": 1.0,
+      "partial_rate": 0.0,
+      "missed_rate": 0.0,
+      "detect_rate": 1.0,
+      "evidence_rate": 1.0,
+      "dismissal_rate": 1.0,
+      "noise_rate": 1.0
+    },
+    "cases": {
+      "gpu-reset": {
+        "status": "DETECTED",
+        "severity_ok": true,
+        "evidence_ok": true,
+        "dismissal_ok": true,
+        "findings_emitted": 1,
+        "expected_count": 1,
+        "detail": "GPU ring timeout / reset"
+      },
+      "nvme-io-error": {
+        "status": "DETECTED",
+        "severity_ok": true,
+        "evidence_ok": true,
+        "dismissal_ok": true,
+        "findings_emitted": 1,
+        "expected_count": 1,
+        "detail": "storage I/O timeout/error"
+      },
+      "oom": {
+        "status": "DETECTED",
+        "severity_ok": true,
+        "evidence_ok": true,
+        "dismissal_ok": true,
+        "findings_emitted": 1,
+        "expected_count": 1,
+        "detail": "OOM killed a process"
+      },
+      "soft-lockup": {
+        "status": "DETECTED",
+        "severity_ok": true,
+        "evidence_ok": true,
+        "dismissal_ok": true,
+        "findings_emitted": 1,
+        "expected_count": 1,
+        "detail": "CPU lockup / hung task"
+      },
+      "systemd-failed": {
+        "status": "DETECTED",
+        "severity_ok": true,
+        "evidence_ok": true,
+        "dismissal_ok": true,
+        "findings_emitted": 1,
+        "expected_count": 1,
+        "detail": "failed systemd unit"
+      }
+    }
+  },
+  "improvement_basis": {
+    "base": "repository start be99392 (baseline week)",
+    "commits_count": 20,
+    "commits": [
+      "1275023 feat: per-host case library (shadow) + weekly software scorecard",
+      "e5a294f feat: harden the last two product pillars — enforced severity + actionable fix",
+      "00e76d2 fix(collectors,executors): sudo elevation for log collection",
+      "c4c8bda feat(cli): dmesg-agent check pre-flight subcommand",
+      "fcd8b6f docs(readme): versioning and release process",
+      "8d33384 ci: version control + CI/CD pipelines",
+      "90ff8b3 docs(readme): full option reference — every flag, subcommand and env var",
+      "64ae50e feat(cli): dmesg-agent eval subcommand (sashiko-benchmark-style entry)",
+      "ba4d605 eval: sashiko-benchmark three-state scoring + noise rate (batch C)",
+      "222bb83 feat: zero-token cross-run recurrence tracking (sashiko batch B)",
+      "3a8db77 feat: sashiko-parity batch A — drift tolerance, both-sides inconclusive, in-block trimming",
+      "4f86747 feat: stream model output live to stderr (sashiko-style progress)",
+      "12f8cb2 fix: run_analysis accepted no scan_text kwarg — any --scan/SSH run crashed",
+      "24bb5fd feat(ssh): password authentication via --ssh-password",
+      "0ac01de eval: known-answer harness measuring locate/severity/evidence/dismissal",
+      "3fe1c51 feat: close the non-dmesg blind spots — proactive system scan, vmcore, drgn, cross-boot",
+      "34e5aa9 i18n: replace all Chinese text with idiomatic English",
+      "6e42fc0 feat(config): persistent LLM config file + dmesg-agent config subcommand",
+      "8da006e fix(packaging): drop superseded license classifier so PEP 639 builds work",
+      "653714c license: switch from MIT to Apache-2.0 (patent grant, aligns with sashiko/syzkaller ecosystem)"
+    ],
+    "files_changed": 56,
+    "insertions": 6089,
+    "test_delta": null,
+    "eval_case_delta": null,
+    "tests_pass": true
+  },
+  "note": "baseline: case library (shadow) and weekly scorecard introduced; architecture and offline-harness accuracy measured; live-model accuracy is the next weekly run (--live)",
+  "recorded_at": "2026-11-27T15:10:13Z"
+}
