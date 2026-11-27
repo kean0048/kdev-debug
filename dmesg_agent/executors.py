@@ -69,11 +69,15 @@ class LocalExecutor(Executor):
     def run(self, cmd: str, sudo: bool = False, timeout: int = 30) -> ExecResult:
         argv: list[str] = ["sh", "-c", cmd]
         password = None
-        if sudo and not self._is_root and self._needs_password():
-            password = self._password()
-            if password is None:
-                return ExecResult(ok=False, skip_reason="requires root (no password provided, skipped)")
-            argv = ["sudo", "-S", "sh", "-c", cmd]
+        if sudo and not self._is_root:
+            if self._needs_password():
+                password = self._password()
+                if password is None:
+                    return ExecResult(ok=False, skip_reason="requires root (no password provided, skipped)")
+                argv = ["sudo", "-S", "sh", "-c", cmd]
+            else:
+                # passwordless/cached sudo: still elevate, just without -S piping
+                argv = ["sudo", "sh", "-c", cmd]
         try:
             proc = subprocess.run(
                 argv, capture_output=True, text=True, errors="replace",

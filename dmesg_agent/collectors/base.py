@@ -52,16 +52,23 @@ def collect_via(executor, boot: str = "now") -> RawBundle:
     """Collect the kernel log and system context via an executor (shared by local/ssh)."""
     cmds = _DMESG_CMDS.get(boot, _DMESG_CMDS["now"])
     dmesg_text = None
-    for _label, cmd in cmds:
-        r = executor.run(cmd, timeout=60)
-        if r.usable:
-            dmesg_text = r.out
+    # pass 1 unprivileged; pass 2 via sudo (triggers the password prompt only
+    # if needed — journalctl -b -1 and dmesg are read-only, whitelisted commands)
+    for sudo in (False, True):
+        for _label, cmd in cmds:
+            r = executor.run(cmd, sudo=sudo, timeout=60)
+            if r.usable:
+                dmesg_text = r.out
+                break
+        if dmesg_text:
             break
     if not dmesg_text:
         hint = (
-            "reading the previous boot's log requires journalctl (run with sudo)"
+            "reading the previous boot's log requires journalctl with root "
+            "(sudo prompt was declined or unavailable); or use --file"
             if boot == "previous"
-            else "reading the kernel log may need root (sudo dmesg); or use --file to analyze an exported log"
+            else "reading the kernel log may need root (sudo prompt was declined or unavailable); "
+                 "or use --file to analyze an exported log"
         )
         raise CollectError(f"could not obtain the kernel log: {hint}")
 
