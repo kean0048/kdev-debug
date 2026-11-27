@@ -38,6 +38,9 @@ def _check_evidences(items: list, field: str, label: str, norm_lines: list[str],
             errors.append(f"{label}[{i}] is missing {field} (a required field of the three-tier routing)")
 
 
+SEVERITIES = {"critical", "high", "medium", "low"}
+
+
 def validate_analysis(result: dict, corpus_lines: list[str]) -> list[str]:
     """corpus = original log lines + collected scan/prefetch output lines."""
     errors: list[str] = []
@@ -48,6 +51,21 @@ def validate_analysis(result: dict, corpus_lines: list[str]) -> list[str]:
         errors.append("findings must be an array (may be empty)")
     else:
         _check_evidences(result["findings"], "", "findings", norm, errors)
+        for i, f in enumerate(result["findings"]):
+            if not isinstance(f, dict):
+                continue
+            if str(f.get("severity", "")).lower() not in SEVERITIES:
+                errors.append(
+                    f"findings[{i}] severity must be one of critical/high/medium/low, "
+                    f"got {f.get('severity', '')!r}"
+                )
+            steps = [str(s).strip() for s in (f.get("next_steps") or []) if str(s).strip()]
+            if not steps:
+                errors.append(
+                    f"findings[{i}] needs at least one concrete next_steps entry — a "
+                    f"confirmed issue must come with an actionable fix/mitigation or a "
+                    f"named follow-up; free-form prose in the summary is not enough"
+                )
     if not isinstance(result.get("inconclusive_concerns"), list):
         errors.append("inconclusive_concerns must be an array (may be empty)")
     else:
@@ -171,6 +189,12 @@ def validate_verdict(verdict: dict | None, corpus_lines: list[str]) -> list[str]
     evs = verdict.get("evidence") or []
     if verdict.get("verdict") in ("confirmed", "dismissed") and not evs:
         errors.append("confirmed/dismissed must provide evidence (verbatim quotes from the original log or collected output)")
+    if verdict.get("verdict") == "confirmed":
+        steps = [str(s).strip() for s in (verdict.get("next_steps") or []) if str(s).strip()]
+        if not steps:
+            errors.append("a confirmed verdict must include at least one actionable next_steps entry (fix/mitigation)")
+        if str(verdict.get("updated_severity", "")).lower() not in SEVERITIES:
+            errors.append("a confirmed verdict must set updated_severity to critical/high/medium/low")
     for j, ev in enumerate(evs):
         q = ev.get("quote", "") if isinstance(ev, dict) else ""
         if not _quote_exists(q, norm):

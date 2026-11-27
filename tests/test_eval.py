@@ -56,12 +56,22 @@ def test_partial_when_inconclusive_or_wrong_severity():
     assert score_case(wrong_sev, expect)["status"] == "PARTIAL"
 
 
+def test_partial_when_no_actionable_fix():
+    expect = {"expect": {"subsystem": ["storage"], "severity": ["critical"],
+                         "any_keywords": ["nvme"]}, "must_not_dismiss": []}
+    no_fix = {"findings": [{"title": "nvme timeout", "subsystem": "storage",
+                            "severity": "critical", "next_steps": [],
+                            "evidence": [{"quote": "x", "verified": True}]}]}
+    assert score_case(no_fix, expect)["status"] == "PARTIAL"
+
+
 def test_noise_rate_counts_emitted_findings():
     expect = {"expect": {"subsystem": ["memory"], "severity": ["high"],
                          "any_keywords": ["oom"]}, "must_not_dismiss": [],
               "expected_count": 1}
     noisy = {"findings": [
         {"title": "oom kill", "subsystem": "memory", "severity": "high",
+         "next_steps": ["cap the cgroup"],
          "evidence": [{"quote": "x", "verified": True}]},
         {"title": "extra a", "subsystem": "gpu", "severity": "low", "evidence": []},
         {"title": "extra b", "subsystem": "net", "severity": "low", "evidence": []}]}

@@ -11,9 +11,11 @@ Scoring per case — sashiko-benchmark-style three-state classification
 (src/benchmark.rs DETECTED / PARTIALLY_DETECTED / MISSED):
   DETECTED : a *confirmed finding* whose subsystem matches expect.subsystem,
              whose text matches any_keywords, severity is in expect.severity,
-             and every quote verified verbatim.
+             every quote verified verbatim, AND that carries at least one
+             actionable next_steps entry.
   PARTIAL  : the issue was spotted but in the inconclusive tier, or severity
-             is wrong, or some evidence failed verbatim verification.
+             is wrong, or some evidence failed verbatim verification, or no
+             concrete fix/mitigation was proposed.
   MISSED   : not located at all.
 Plus noise: findings emitted per case vs expected_count (default 1) —
 sashiko tracks findings/patch signal-to-noise; we track findings/case.
@@ -111,9 +113,10 @@ def score_case(result: dict, expect: dict) -> dict:
             quotes_passed += 1 if d.get("quote_verified") else 0
     no_halluc = quotes_total == 0 or quotes_passed == quotes_total
 
+    steps = [str(s).strip() for s in ((located or {}).get("next_steps") or []) if str(s).strip()]
     if located is None:
         status = "MISSED"
-    elif located_tier == "findings" and sev_ok and no_halluc:
+    elif located_tier == "findings" and sev_ok and no_halluc and steps:
         status = "DETECTED"
     else:
         status = "PARTIAL"

@@ -90,7 +90,7 @@ def render(result: dict | None, bundle: RawBundle, summary: VerifySummary,
                 out.append(f"\n- Causal chain: {f['causal_chain']}")
             steps = f.get("next_steps") or []
             if steps:
-                out.append("- Next steps:")
+                out.append("- How to fix / next actions:")
                 for s in steps:
                     out.append(f"  - {s}")
             out.append("")

@@ -16,7 +16,8 @@ def good_result():
     return {
         "summary": "ok",
         "findings": [{"title": "OOM", "subsystem": "memory", "severity": "high",
-                      "evidence": [{"line": 1, "quote": OOM_QUOTE, "why": "w"}]}],
+                      "evidence": [{"line": 1, "quote": OOM_QUOTE, "why": "w"}],
+                      "next_steps": ["raise the container memory limit or add swap"]}],
         "inconclusive_concerns": [{"title": "NVMe failure?", "subsystem": "storage", "estimated_severity": "high",
                                    "signal_reason": "timeout", "hypothesis": "failing ssd",
                                    "evidence": [{"line": 2, "quote": NVME_QUOTE, "why": "w"}],
@@ -132,9 +133,31 @@ def test_deep_dive_bad_verdict_retries_then_fails_gracefully():
 
 
 def test_validate_verdict_quote_from_collection():
-    v = {"verdict": "confirmed", "evidence": [{"quote": "some collected line"}]}
+    v = {"verdict": "confirmed", "updated_severity": "high",
+         "next_steps": ["replace the disk"],
+         "evidence": [{"quote": "some collected line"}]}
     assert any("quote" in e for e in validate_verdict(v, ["nothing"]))
     assert validate_verdict(v, ["[x] some collected line"]) == []
+
+
+def test_validate_finding_requires_severity_and_fix():
+    r = good_result()
+    del r["findings"][0]["severity"]
+    assert any("severity" in e for e in validate_analysis(r, LOG))
+    r = good_result()
+    r["findings"][0]["severity"] = "urgent"  # not a legal level
+    assert any("severity" in e for e in validate_analysis(r, LOG))
+    r = good_result()
+    r["findings"][0]["next_steps"] = []
+    assert any("next_steps" in e for e in validate_analysis(r, LOG))
+
+
+def test_validate_confirmed_verdict_requires_actionable_steps():
+    v = {"verdict": "confirmed", "updated_severity": "high", "next_steps": [],
+         "evidence": [{"quote": "x"}]}
+    assert any("next_steps" in e for e in validate_verdict(v, ["x"]))
+    v = {"verdict": "confirmed", "next_steps": ["do it"], "evidence": [{"quote": "x"}]}
+    assert any("updated_severity" in e for e in validate_verdict(v, ["x"]))
 
 
 def test_run_analysis_passes_scan_text_into_prompt():
