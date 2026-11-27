@@ -1,8 +1,8 @@
 {
   "week": "2026-W48",
   "date": "2026-11-27",
-  "version": "0.4.0",
-  "git_head": "1275023",
+  "version": "0.5.0",
+  "git_head": "50b09d2",
   "rubric_version": 1,
   "scoring_start": "2026-W48",
   "weights": {
@@ -11,18 +11,18 @@
     "improvement": 0.2
   },
   "metrics": {
-    "version": "0.4.0",
+    "version": "0.5.0",
     "week": "2026-W48",
     "date": "2026-11-27",
-    "git_head": "1275023",
-    "modules": 22,
-    "module_loc": 3258,
+    "git_head": "50b09d2",
+    "modules": 23,
+    "module_loc": 3875,
     "largest_module": "dmesg_agent/scorecard.py",
     "largest_module_lines": 487,
-    "docstring_fraction": 0.95,
-    "annotations_fraction": 0.86,
-    "test_files": 15,
-    "test_functions": 105,
+    "docstring_fraction": 0.96,
+    "annotations_fraction": 0.87,
+    "test_files": 16,
+    "test_functions": 121,
     "runtime_deps": 1,
     "has_readme": true,
     "has_invariants": true,
@@ -46,7 +46,7 @@
           "item": "modularity (module count)",
           "points": 1.5,
           "max": 1.5,
-          "evidence": "22 modules, 3258 lines"
+          "evidence": "23 modules, 3875 lines"
         },
         {
           "item": "largest module stays reviewable",
@@ -58,13 +58,13 @@
           "item": "test-file density",
           "points": 1.0,
           "max": 1.0,
-          "evidence": "15 test files / 22 modules"
+          "evidence": "16 test files / 23 modules"
         },
         {
           "item": "test functions",
           "points": 1.5,
           "max": 1.5,
-          "evidence": "105 test functions (full credit at 60)"
+          "evidence": "121 test functions (full credit at 60)"
         },
         {
           "item": "docs",
@@ -76,7 +76,7 @@
           "item": "module docstrings",
           "points": 0.5,
           "max": 0.5,
-          "evidence": "95% of modules documented"
+          "evidence": "96% of modules documented"
         },
         {
           "item": "CI runs tests",
@@ -94,7 +94,7 @@
           "item": "future annotations",
           "points": 1.0,
           "max": 1.0,
-          "evidence": "86% of modules"
+          "evidence": "87% of modules"
         }
       ]
     },
@@ -142,7 +142,7 @@
           "item": "code growth",
           "points": 2.0,
           "max": 2.0,
-          "evidence": "6089 insertions across 56 file(s)"
+          "evidence": "7315 insertions across 60 file(s)"
         },
         {
           "item": "test growth",
@@ -235,6 +235,8 @@
     "base": "repository start be99392 (baseline week)",
     "commits_count": 20,
     "commits": [
+      "50b09d2 feat: verdict-first reports, self-contained HTML, system-change correlation",
+      "986002e scorecard: 2026-W48 baseline (7.0/10, grade C)",
       "1275023 feat: per-host case library (shadow) + weekly software scorecard",
       "e5a294f feat: harden the last two product pillars — enforced severity + actionable fix",
       "00e76d2 fix(collectors,executors): sudo elevation for log collection",
@@ -252,16 +254,14 @@
       "0ac01de eval: known-answer harness measuring locate/severity/evidence/dismissal",
       "3fe1c51 feat: close the non-dmesg blind spots — proactive system scan, vmcore, drgn, cross-boot",
       "34e5aa9 i18n: replace all Chinese text with idiomatic English",
-      "6e42fc0 feat(config): persistent LLM config file + dmesg-agent config subcommand",
-      "8da006e fix(packaging): drop superseded license classifier so PEP 639 builds work",
-      "653714c license: switch from MIT to Apache-2.0 (patent grant, aligns with sashiko/syzkaller ecosystem)"
+      "6e42fc0 feat(config): persistent LLM config file + dmesg-agent config subcommand"
     ],
-    "files_changed": 56,
-    "insertions": 6089,
+    "files_changed": 60,
+    "insertions": 7315,
     "test_delta": null,
     "eval_case_delta": null,
     "tests_pass": true
   },
-  "note": "baseline: case library (shadow) and weekly scorecard introduced; architecture and offline-harness accuracy measured; live-model accuracy is the next weekly run (--live)",
-  "recorded_at": "2026-11-27T15:10:13Z"
+  "note": "v0.5.0: verdict-first reports (brief/HTML/ANSI), system-change correlation, case-library run diff. Live-model accuracy not yet measured (next weekly run with --live).",
+  "recorded_at": "2026-11-27T15:29:03Z"
 }
