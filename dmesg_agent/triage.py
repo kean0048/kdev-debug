@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 
 CONTEXT = 3  # lines of context kept around each hit
 
@@ -60,6 +61,50 @@ SIGNATURES: list[tuple[str, re.Pattern]] = [
 ]
 
 GENERIC_LEVEL = re.compile(r"\b(err|error|fail|failed|failure|fault|crit|alert|emerg|panic)\b", re.IGNORECASE)
+
+_MONTHS = {m: i for i, m in enumerate(
+    ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), 1)}
+# dmesg -T: [Wed Nov 25 21:59:49 2026]
+_DMESG_T_RE = re.compile(
+    r"\[\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+"
+    r"(\d{2}):(\d{2}):(\d{2})\s+(\d{4})\]")
+# journalctl short: Nov 25 21:59:49 host kernel: ...
+_JOURNAL_RE = re.compile(
+    r"^([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+\S+\s+\S+:")
+
+
+def parse_first_error_time(lines: list[str], blocks: list[Block],
+                           now: datetime | None = None) -> datetime | None:
+    """Wall-clock time of the first suspicious segment, if the log carries it.
+
+    Handles dmesg -T (absolute) and journalctl short (year assumed, with a
+    month-rollover guard). Raw dmesg with only monotonic seconds returns None.
+    """
+    now = now or datetime.now()
+    for block in blocks:
+        for n in range(block.start, min(block.end, block.start + 24) + 1):
+            if n > len(lines):
+                break
+            line = lines[n - 1]
+            m = _DMESG_T_RE.search(line)
+            if m and m.group(1) in _MONTHS:
+                month, day, hh, mm, ss, year = m.groups()
+                try:
+                    return datetime(int(year), _MONTHS[month], int(day),
+                                    int(hh), int(mm), int(ss))
+                except ValueError:
+                    continue
+            m = _JOURNAL_RE.match(line)
+            if m and m.group(1) in _MONTHS:
+                month, day, hh, mm, ss = m.groups()
+                month_num = _MONTHS[month]
+                year = now.year - 1 if month_num - now.month > 6 else now.year
+                try:
+                    return datetime(year, month_num, int(day), int(hh), int(mm), int(ss))
+                except ValueError:
+                    continue
+    return None
 
 
 def find_blocks(lines: list[str]) -> list[Block]:

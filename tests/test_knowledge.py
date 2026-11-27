@@ -219,6 +219,29 @@ def test_cases_cli_unknown_id(tmp_path, capsys):
     assert "not found" in capsys.readouterr().err
 
 
+def test_run_diff_tracks_new_resolved_ongoing(tmp_path):
+    db = tmp_path / "kb.db"
+    first = _run(db, [_oom(1, 10)])
+    assert first["diff"] is None  # no previous run on this host
+    second = _run(db, [_oom(2, 20)])
+    assert second["diff"]["new"] == []
+    assert len(second["diff"]["ongoing"]) == 1
+    third = _run(db, [_oom(3, 30), _ata("ata6")])
+    assert len(third["diff"]["new"]) == 1
+    assert len(third["diff"]["ongoing"]) == 1
+    # dropping the ATA finding marks it resolved relative to the previous run
+    fourth = _run(db, [_oom(4, 40)])
+    assert len(fourth["diff"]["resolved"]) == 1
+    assert fourth["diff"]["new"] == []
+
+
+def test_run_diff_is_host_scoped(tmp_path):
+    db = tmp_path / "kb.db"
+    _run(db, [_oom(1, 10)], host="host-a")
+    out = _run(db, [_oom(2, 20)], host="host-b")
+    assert out["diff"] is None
+
+
 def test_occurrence_evidence_is_stored(tmp_path):
     db = tmp_path / "kb.db"
     _run(db, [_oom(1, 10)])

@@ -261,6 +261,9 @@ def record_run(db_path, host: str, result: dict, *, kernel: str = "", source: st
     new_cases = 0
     conn = _connect(Path(db_path))
     try:
+        prev_run = conn.execute(
+            "SELECT run_uuid FROM runs WHERE host=? ORDER BY id DESC LIMIT 1",
+            (host,)).fetchone()
         for idx, f in enumerate(findings):
             fp = fingerprint_for_finding(f)
             if fp is None:
@@ -280,6 +283,7 @@ def record_run(db_path, host: str, result: dict, *, kernel: str = "", source: st
             matches.append(info)
             _annotate(f, info)
 
+        diff = _run_diff(conn, prev_run["run_uuid"] if prev_run else None, run_uuid)
         conn.execute(
             "INSERT OR IGNORE INTO runs(run_uuid, ts, host, kernel, source, summary, "
             "findings, verified_pass, verified_total) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -301,7 +305,36 @@ def record_run(db_path, host: str, result: dict, *, kernel: str = "", source: st
         "new_cases": new_cases,
         "recurrences": sum(1 for m in matches
                            if m["tier"] in ("exact", "merged") and m["occurrences"] >= 2),
+        "diff": diff,
     }
+
+
+def _run_diff(conn: sqlite3.Connection, prev_uuid: str | None,
+              current_uuid: str) -> dict | None:
+    """Compare the case sets of this run and the previous run on the same host."""
+    if not prev_uuid:
+        return None
+
+    def case_ids(run_uuid: str) -> set[int]:
+        return {row["case_id"] for row in conn.execute(
+            "SELECT DISTINCT case_id FROM occurrences WHERE run_uuid=?", (run_uuid,))}
+
+    current, previous = case_ids(current_uuid), case_ids(prev_uuid)
+
+    def rows(ids: set[int]) -> list[dict]:
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        return [{"case_id": r["id"], "title": r["title"], "severity": r["severity"],
+                 "status": r["status"]}
+                for r in conn.execute(
+                    f"SELECT id, title, severity, status FROM cases WHERE id IN ({placeholders}) "
+                    "LIMIT 10", tuple(ids))]
+
+    return {"previous_run": prev_uuid,
+            "new": rows(current - previous),
+            "resolved": rows(previous - current),
+            "ongoing": rows(current & previous)}
 
 
 def _match_or_create(conn: sqlite3.Connection, host: str, fp: Fingerprint, finding: dict,

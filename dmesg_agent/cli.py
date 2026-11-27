@@ -26,12 +26,14 @@ from .knowledge import DEFAULT_FUZZY, KnowledgeError, cases_main, record_run, re
 from .llm import Client, LLMError
 from .passwds import PassResolver
 from .srcmap import SrcMap, extract_symbols
-from .systemscan import run_cross_boot, run_live_probe, run_system_scan
+from .systemscan import (run_cross_boot, run_live_probe, run_system_changes,
+                         run_system_scan)
 from .playbooks import run_prefetch
 from .prompts import render_prefetch, render_scan
-from .report import render
+from .report import apply_ansi, render, render_brief
+from .report_html import render_html
 from .scorecard import format_for_check, latest_score, score_main
-from .triage import Block, find_blocks, render_blocks
+from .triage import Block, find_blocks, parse_first_error_time, render_blocks
 from .verify import VerifySummary, verify_result
 from .vmcore import analyze_vmcore
 
@@ -62,6 +64,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--askpass", choices=["auto", "terminal", "gui", "none"], default="auto",
                    help="how to obtain the sudo password (default auto: terminal first, GUI dialog fallback)")
     p.add_argument("-o", "--output", help="write the report to a file (default: stdout)")
+    p.add_argument("--brief", action="store_true",
+                   help="verdict, findings table and next actions only (triage-sized)")
+    p.add_argument("--html", metavar="PATH",
+                   help="also write a self-contained HTML report (print/PDF-ready)")
+    p.add_argument("--color", choices=["auto", "always", "never"], default="auto",
+                   help="ANSI colors on stdout (default auto: TTY only, respects NO_COLOR)")
     p.add_argument("--json", action="store_true", help="emit structured JSON instead of a Markdown report")
     p.add_argument("--kernel-src", metavar="PATH",
                    help="kernel source tree (git) for call-trace source correlation; "
@@ -388,6 +396,22 @@ def main(argv: list[str] | None = None) -> int:
     else:
         log("[3/5]", "skipping prefetch" + (" (no executor with --file)" if args.file else ""))
 
+    changes_text = ""
+    if executor is not None:
+        first_ts = parse_first_error_time(lines, blocks)
+        changes_evs = run_system_changes(executor, first_ts)
+        changes_text = render_scan(changes_evs)
+        for ev in changes_evs:
+            scan_lines.extend(ev.output.splitlines())
+        ok_count = sum(1 for e in changes_evs if e.status == "ok")
+        log("[3/5]", f"system-change correlation: {ok_count} item(s)"
+                     + (f" around {first_ts:%Y-%m-%d %H:%M}" if first_ts else
+                        " (no absolute timestamps in the log)"))
+        if changes_text:
+            prefetch_text = (
+                prefetch_text + "\n\n[System changes around the first fault — whitelisted evidence]\n"
+                + changes_text).strip()
+
     source_text = ""
     srcmap_version = ""
     src_path = args.kernel_src or os.environ.get("DMESG_AGENT_KERNEL_SRC")
@@ -460,20 +484,39 @@ def main(argv: list[str] | None = None) -> int:
         print("warning: model output hit the max_tokens ceiling and was truncated "
               "(results may be incomplete)", file=sys.stderr)
 
+    use_color = args.color == "always" or (
+        args.color == "auto" and sys.stdout.isatty() and not os.environ.get("NO_COLOR"))
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2) if result is not None else
               json.dumps({"error": "model returned no JSON", "raw": answer}, ensure_ascii=False, indent=2))
-    else:
+    elif args.brief:
+        text = render_brief(result, bundle, summary)
+        print(apply_ansi(text) if use_color else text)
+    elif args.output:
         report = render(result, bundle, summary, blocks, raw_text=answer,
                         prefetch_used=bool(prefetch_text), deep_used=deep_used,
                         source_text=source_text, srcmap_version=srcmap_version,
-                        scan_used=bool(scan_text), scan_text=scan_text)
-        if args.output:
-            with open(args.output, "w", encoding="utf-8") as f:
-                f.write(report + "\n")
-            print(f"report written to {args.output}", file=sys.stderr)
-        else:
-            print(report)
+                        scan_used=bool(scan_text), scan_text=scan_text,
+                        changes_text=changes_text)
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(report + "\n")
+        print(f"report written to {args.output}", file=sys.stderr)
+    elif not args.html:
+        report = render(result, bundle, summary, blocks, raw_text=answer,
+                        prefetch_used=bool(prefetch_text), deep_used=deep_used,
+                        source_text=source_text, srcmap_version=srcmap_version,
+                        scan_used=bool(scan_text), scan_text=scan_text,
+                        changes_text=changes_text)
+        print(apply_ansi(report) if use_color else report)
+
+    if args.html:
+        html = render_html(result, bundle, summary, blocks, lines, raw_text=answer,
+                           prefetch_used=bool(prefetch_text), deep_used=deep_used,
+                           scan_used=bool(scan_text), scan_text=scan_text,
+                           changes_text=changes_text, source_text=source_text,
+                           srcmap_version=srcmap_version)
+        Path(args.html).write_text(html + "\n", encoding="utf-8")
+        print(f"HTML report written to {args.html}", file=sys.stderr)
     return 0 if result is not None else 4
 
 

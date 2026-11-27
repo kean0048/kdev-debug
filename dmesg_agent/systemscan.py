@@ -12,8 +12,13 @@ available and triage found nothing suspicious.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from .executors import Executor
 from .playbooks import CollectedEvidence, _truncate
+
+CHANGES_CHAR_BUDGET = 6_000
+CHANGES_MAX_CHARS_PER_CMD = 2_000
 
 SCAN_CHAR_BUDGET = 12_000
 SCAN_MAX_CHARS_PER_CMD = 2_500
@@ -58,6 +63,48 @@ def run_system_scan(executor: Executor) -> list[CollectedEvidence]:
         used += len(ev.output)
         results.append(ev)
         if used >= SCAN_CHAR_BUDGET:
+            break
+    return results
+
+
+def run_system_changes(executor: Executor, ts: datetime | None = None) -> list[CollectedEvidence]:
+    """Recent system changes: reboots, kernel/package installs, suspend/resume,
+    mounts, service restarts — and, when the log carries an absolute time, the
+    non-kernel journal window around the first fault. Sudden faults are often
+    preceded by a change; this is the evidence that makes that link checkable."""
+    cmds: list[tuple[str, str]] = []
+    if ts is not None:
+        since = (ts - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+        until = (ts + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+        cmds.append((
+            f"journalctl --no-pager -o short --since '{since}' --until '{until}' "
+            f"2>/dev/null | grep -viE 'kernel:' | tail -40",
+            f"non-kernel system events around the first fault ({since} ± window)"))
+    cmds += [
+        ("uptime -s; cat /proc/uptime 2>/dev/null", "boot time and uptime"),
+        ("last -x 2>/dev/null | head -10", "recent reboots, shutdowns and runlevel changes"),
+        ("stat -c '%y %n' /boot/vmlinuz-$(uname -r) 2>/dev/null; "
+         "ls -lt /boot/vmlinuz-* 2>/dev/null | head -3",
+         "kernel image install times (did the running kernel change recently?)"),
+        ("tail -20 /var/log/apt/history.log 2>/dev/null", "recent package install/upgrade history"),
+        ("journalctl --no-pager -o short -b --since '7 days ago' 2>/dev/null "
+         "| grep -viE 'kernel:' "
+         "| grep -iE 'upgrade|install|suspend|resume|sleep|mount|umount|restart|Started|Stopped' "
+         "| tail -30", "recent user-space system changes this boot"),
+    ]
+    results: list[CollectedEvidence] = []
+    used = 0
+    for cmd, why in cmds:
+        res = executor.run(cmd, timeout=30)
+        if res.skip_reason:
+            ev = CollectedEvidence(cmd, why, f"(skipped: {res.skip_reason})", "skipped")
+        elif not res.usable:
+            ev = CollectedEvidence(cmd, why, "(no output)", "empty")
+        else:
+            ev = CollectedEvidence(cmd, why, _truncate(res.out, CHANGES_MAX_CHARS_PER_CMD), "ok")
+        used += len(ev.output)
+        results.append(ev)
+        if used >= CHANGES_CHAR_BUDGET:
             break
     return results
 

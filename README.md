@@ -2,14 +2,21 @@
 
 A [sashiko](https://sashiko.dev)-style AI diagnosis agent for kernel logs. Feed it a dmesg and the LLM **triages issues into three tiers** (confirmed / open questions / dismissed); for each open question it **automatically collects deeper data and re-verifies it** (prompting for a password when root is needed); every piece of evidence is **matched verbatim** against the raw data to prevent hallucination.
 
-Pipeline (v2):
+Pipeline (v0.5):
 
 ```
-collect → triage prefilter → proactive system scan (when the log is quiet) + deterministic prefetch
+collect → triage prefilter → proactive system scan (when the log is quiet) + system-change
+        correlation (reboots, kernel/package installs, suspend/resume around the first fault)
+        + deterministic prefetch
         → LLM three-tier analysis
         → per inconclusive item: whitelisted playbook collection (sudo prompt) → LLM verdict re-check
-        → verbatim evidence check → Markdown report
+        → verbatim evidence check → verdict-first Markdown / brief / HTML report
 ```
+
+The report leads with a **verdict box** — system health, the top three issues, a "DO NOW"
+action list, and evidence/recurrence chips — before any detail. `--brief` prints only that
+plus a findings table; `--html` writes a self-contained, print/PDF-ready report with
+severity-colored cards and a timeline. The footer carries the weekly software score.
 
 ## Install
 
@@ -98,6 +105,9 @@ LLM backend & output:
 | `--base-url URL` / `--model NAME` / `--api-key KEY` | OpenAI-compatible endpoint overrides (env or config file also work) |
 | `--max-tokens N` | model output ceiling (default 32768; a truncation warning is printed if hit) |
 | `-o, --output PATH` | write the Markdown report to a file (default: stdout) |
+| `--brief` | verdict box + findings table + next actions only (triage-sized) |
+| `--html PATH` | also write a self-contained HTML report (print/PDF-ready) |
+| `--color auto\|always\|never` | ANSI colors on stdout (auto: TTY only, respects `NO_COLOR`) |
 | `--json` | emit the structured result instead of the report |
 | `-v` | stage-by-stage progress (stderr), including live model streaming |
 | `--version` | print version |
@@ -156,6 +166,19 @@ dmesg-agent --file dmesg.txt --kernel-src /works/Linux-debugs/linux-src
 ```
 
 Flow: extract `func+0x…[module]` symbols → function-definition index (built on first use, cached under `~/.cache/dmesg-agent/`, invalidated when the tree HEAD changes) → function bodies (≤120 lines) plus the file's recent commits → injected into the model context and attached to the report. When the source tree version differs from the running kernel, the report notes that "function bodies may be offset".
+
+### Result presentation
+
+- **Verdict-first**: the Markdown report opens with a boxed `HEALTH:` line, the top three issues, a `DO NOW` action list (de-duplicated next steps from the most severe findings) and evidence/recurrence chips, before any detail.
+- `--brief` prints only the verdict box, a findings table and the open questions — suitable for chat/paste.
+- `--html PATH` writes one self-contained file (inline CSS, no scripts, everything escaped): severity-colored cards, verbatim evidence tables, a timeline of suspect segments, collapsible appendices, print/PDF friendly.
+- `--color auto|always|never` colorizes stdout (auto = TTY only; honors `NO_COLOR`).
+- When the case library knows the host's previous run, the report and verdict show **"Since the previous run: +N new / -M resolved / K ongoing"**.
+- The footer records the tool version and the committed weekly software score.
+
+### System-change correlation
+
+Whenever an executor is available the agent records recent **system changes**: boots (`last -x`, `uptime -s`), the running kernel's install time, package install/upgrade history, and — when the log carries absolute timestamps — the non-kernel journal window (± around the first suspicious segment). A sudden fault that follows a kernel/package change or a suspend/resume becomes a checkable causal link instead of a guess. All commands are read-only and declared in code; nothing model- or log-provided is executed. The data joins the prompt/evidence corpus and lands in the report appendix.
 
 ## Beyond the kernel log
 
