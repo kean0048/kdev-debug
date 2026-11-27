@@ -1,0 +1,4 @@
+Nov 24 21:40:31 thinkstationpgx kernel: NVRM: nvCheckOkFailedNoLog: Check failed: Out of memory [NV_ERR_NO_MEMORY] (0x00000051) returned from _memdescAllocInternal(pMemDesc) @ mem_desc.c:1359
+Nov 24 21:40:31 thinkstationpgx kernel: NVRM: nvAssertOkFailedNoLog: Assertion failed: Out of memory [NV_ERR_NO_MEMORY] (0x00000051) returned from status @ kernel_graphics_context.c:1178
+Nov 24 21:40:31 thinkstationpgx kernel: NVRM: nvCheckOkFailedNoLog: Check failed: Out of memory [NV_ERR_NO_MEMORY] (0x00000051) returned from kgrctxAllocMainCtxBuffer(pGpu, pKernelGraphicsContext, pKernelGraphics, pKernelChannel) @ kernel_graphics_context.c:1387
+Nov 24 21:40:31 thinkstationpgx kernel: NVRM: nvCheckOkFailedNoLog: Check failed: Out of memory [NV_ERR_NO_MEMORY] (0x00000051) returned from kgrctxAllocCtxBuffers(pGpu, pKernelGraphicsObject->pKernelGraphicsContext, pKernelGraphics, pKernelGraphicsObject) @ kernel_graphics_object.c:215

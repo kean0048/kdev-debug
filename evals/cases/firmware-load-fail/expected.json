@@ -1,0 +1,10 @@
+{
+  "id": "firmware-load-fail",
+  "description": "Device firmware load failure with a fallback version",
+  "expect": {
+    "subsystem": ["firmware"],
+    "severity": ["medium", "high"],
+    "any_keywords": ["firmware", "load", "failed"],
+    "must_not_dismiss": []
+  }
+}

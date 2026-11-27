@@ -1,0 +1,4 @@
+[  100.000000] eth0: NIC Link is Down
+[  101.000000] eth0: NIC Link is Up 1000 Mbps Full Duplex, Flow Control: RX/TX
+[  110.000000] eth0: NIC Link is Down
+[  111.000000] eth0: NIC Link is Up 1000 Mbps Full Duplex, Flow Control: RX/TX

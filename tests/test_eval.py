@@ -97,6 +97,21 @@ def test_score_case_detects_bad_dismissal():
     assert not score_case(res, expect)["dismissal_ok"]
 
 
+def test_llm_error_becomes_missed_not_crash():
+    from dmesg_agent.llm import LLMError
+
+    class Boom:
+        last_finish_reason = None
+
+        def chat(self, messages, retries=0, stream_cb=None):
+            raise LLMError("503 Service Unavailable")
+
+    case = CASES / "oom"
+    row = run_case(case, Boom())
+    assert row["status"] == "MISSED"
+    assert "LLM error" in row["detail"]
+
+
 def test_cli_runner_smoke():
     r = subprocess.run([sys.executable, str(ROOT / "evals" / "run_eval.py"), "--json"],
                        capture_output=True, text=True, timeout=120)

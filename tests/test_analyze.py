@@ -124,6 +124,35 @@ def test_deep_dive_dismiss():
     assert not any(c.get("title") == "NVMe failure?" for c in result["inconclusive_concerns"])
 
 
+def test_deep_dive_second_round_routes_by_stated_gap():
+    inconclusive = {
+        "verdict": "inconclusive",
+        "reason": "SMART is clean; check memory pressure and OOM history",
+        "evidence": [], "next_steps": [],
+    }
+    confirmed = {
+        "verdict": "confirmed", "reason": "the OOM killer did run",
+        "updated_root_cause": "memory exhaustion",
+        "updated_severity": "high",
+        "evidence": [{"source": "log", "quote": OOM_QUOTE, "why": "victim"}],
+        "next_steps": ["reduce memory usage or add swap"],
+    }
+    from dmesg_agent.playbooks import DEEP_BY_SUBSYSTEM
+    outs = {}
+    for sub in ("storage", "memory"):
+        for c in DEEP_BY_SUBSYSTEM[sub]:
+            outs[c.cmd] = "Reallocated 0" if "smartctl" in c.cmd else ""
+    ex = FakeExecutor(outs)
+    client = FakeClient([json.dumps(inconclusive), json.dumps(confirmed)])
+    result, _ = deep_dive(client, ex, good_result(), LOG,
+                          RawBundle(dmesg_text="", source="fake"), max_rounds=2)
+    assert result["findings"][-1]["deep_confirmed"] is True
+    assert result["deep_dive_summary"]["rounds"] == 2
+    dd = result["findings"][-1]["deep_dive"]
+    assert len(dd["rounds"]) == 2
+    assert any("oom-kill" in cmd for cmd in dd["rounds"][1]["commands"])
+
+
 def test_deep_dive_bad_verdict_retries_then_fails_gracefully():
     r = good_result()
     client = FakeClient(["garbage", "still garbage"])
@@ -169,3 +198,37 @@ def test_run_analysis_passes_scan_text_into_prompt():
     assert result["summary"] == "ok"
     user_msg = client.calls[0][1]["content"]
     assert "Proactive system scan" in user_msg and "systemctl --failed" in user_msg
+
+
+def test_run_analysis_injects_case_history():
+    good = json.dumps({"summary": "ok", "findings": [], "inconclusive_concerns": [],
+                       "dismissed_concerns": []})
+    client = FakeClient([good])
+    run_analysis(client, RawBundle(dmesg_text=""), "", "", LOG,
+                 history_text="- #7 [confirmed] storage: sda I/O failure (seen x3)")
+    user_msg = client.calls[0][1]["content"]
+    assert "Case history on this host" in user_msg
+    assert "#7" in user_msg and "sda I/O failure" in user_msg
+
+
+def test_run_analysis_injects_deterministic_facts():
+    good = json.dumps({"summary": "ok", "findings": [], "inconclusive_concerns": [],
+                       "dismissed_concerns": []})
+    client = FakeClient([good])
+    run_analysis(client, RawBundle(dmesg_text=""), "", "", LOG,
+                 facts_text="- [oom] chrome: killed 2 time(s)")
+    user_msg = client.calls[0][1]["content"]
+    assert "Deterministic facts" in user_msg
+    assert "do not contradict" in user_msg
+    assert "chrome" in user_msg
+
+
+def test_render_history_bounds_output():
+    from dmesg_agent.prompts import render_history
+    h = {"last_run": {"ts": "t", "summary": "s" * 1000, "findings": 2,
+                      "verified_pass": 3, "verified_total": 4},
+         "cases": [{"id": 1, "title": "x" * 500, "subsystem": "storage",
+                    "status": "confirmed", "occurrences": 2, "last_seen": "t"}]}
+    text = render_history(h, max_chars=150)
+    assert "history truncated" in text
+    assert len(text) < 220

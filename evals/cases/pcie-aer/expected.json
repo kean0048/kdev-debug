@@ -1,0 +1,10 @@
+{
+  "id": "pcie-aer",
+  "description": "PCIe AER corrected errors from the root port",
+  "expect": {
+    "subsystem": ["hardware"],
+    "severity": ["medium", "high"],
+    "any_keywords": ["aer", "pcie"],
+    "must_not_dismiss": []
+  }
+}

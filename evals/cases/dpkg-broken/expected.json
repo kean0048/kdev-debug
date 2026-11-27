@@ -1,0 +1,10 @@
+{
+  "id": "dpkg-broken",
+  "description": "Package post-installation failure leaving dpkg in a broken state",
+  "expect": {
+    "subsystem": ["package"],
+    "severity": ["medium", "high"],
+    "any_keywords": ["dpkg", "package"],
+    "must_not_dismiss": []
+  }
+}

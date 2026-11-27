@@ -1,0 +1,10 @@
+{
+  "id": "hard-lockup",
+  "description": "Hard lockup detected by the watchdog, escalating to panic",
+  "expect": {
+    "subsystem": ["locking"],
+    "severity": ["high", "critical"],
+    "any_keywords": ["lockup", "watchdog"],
+    "must_not_dismiss": []
+  }
+}

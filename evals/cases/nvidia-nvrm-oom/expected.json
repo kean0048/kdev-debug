@@ -1,0 +1,10 @@
+{
+  "id": "nvidia-nvrm-oom",
+  "description": "Real log from thinkstationpgx (kernel 7.0.0-1025-nvidia): the NVIDIA driver repeatedly fails GPU memory allocation with NV_ERR_NO_MEMORY. This is not a kernel OOM-killer event.",
+  "expect": {
+    "subsystem": ["gpu"],
+    "severity": ["medium", "high"],
+    "any_keywords": ["nvrm", "nvidia", "gpu", "out of memory"],
+    "must_not_dismiss": []
+  }
+}

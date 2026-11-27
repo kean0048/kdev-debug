@@ -58,7 +58,7 @@ sys.path.insert(0, str(HERE.parent))
 from dmesg_agent.analyze import run_analysis  # noqa: E402
 from dmesg_agent.collectors.base import RawBundle  # noqa: E402
 from dmesg_agent.config import load_config  # noqa: E402
-from dmesg_agent.llm import Client  # noqa: E402
+from dmesg_agent.llm import Client, LLMError  # noqa: E402
 from dmesg_agent.triage import find_blocks, render_blocks  # noqa: E402
 from dmesg_agent.verify import verify_result  # noqa: E402
 
@@ -141,13 +141,27 @@ def score_case(result: dict, expect: dict) -> dict:
 
 # --- offline stub client: emits a schema-valid answer derived from log signatures ---
 
+# patterns are matched against a lower-cased blob; keep them lowercase
 _SIG_TO = [
-    (r"out of memory|oom-kill", "memory", "OOM killed a process", ["oom", "out of memory"]),
-    (r"nvme.*timeout|I/O .*timeout|blk_update_request|medium error", "storage", "storage I/O timeout/error", ["io", "nvme", "error"]),
-    (r"ring .*timeout|gpu reset|amdgpu", "gpu", "GPU ring timeout / reset", ["gpu", "ring"]),
+    (r"out of memory: killed process|oom-kill|memory cgroup out of memory", "memory", "OOM killed a process", ["oom", "out of memory"]),
+    (r"nvme.*timeout|i/o .*timeout|blk_update_request|medium error", "storage", "storage I/O timeout/error", ["io", "nvme", "error"]),
+    (r"ring .*timeout|gpu reset|amdgpu|nvrm", "gpu", "GPU driver allocation failure / reset", ["gpu", "nvrm"]),
     (r"soft lockup|hung_task|blocked for more than", "locking", "CPU lockup / hung task", ["lockup"]),
     (r"failed to start|main process exited|entered failed state", "service", "failed systemd unit", ["systemd", "failed"]),
-    (r"No space left|ENOSPC", "disk-space", "filesystem full", ["space"]),
+    (r"no space left|enospc", "disk-space", "filesystem full: no space left", ["space"]),
+    (r"xhci.*unknown stream ring|transfer event.*unknown stream", "usb", "USB xHCI stream-ring anomaly", ["xhci", "usb"]),
+    (r"pcieport.*aer|pcie bus error", "hardware", "PCIe AER error", ["aer", "pcie"]),
+    (r"edac mc.*\bue\b", "hardware", "EDAC uncorrected ECC error", ["edac", "ecc"]),
+    (r"machine check|mce: \[hardware error\]", "hardware", "Machine check hardware error", ["machine check", "hardware"]),
+    (r"temperature above threshold|thermal.*throttl|critical temperature", "thermal", "thermal throttling / overheating", ["thermal", "temperature"]),
+    (r"rcu.*stall", "locking", "RCU stall", ["rcu", "stall"]),
+    (r"hard lockup", "locking", "Hard lockup watchdog", ["lockup", "watchdog"]),
+    (r"xfs.*corruption|unmount and run xfs_repair", "storage", "XFS metadata corruption", ["xfs", "corruption"]),
+    (r"usb .*disconnect", "usb", "USB disconnect/reset", ["usb", "disconnect"]),
+    (r"nic link is (down|up)", "network", "NIC link flap", ["link", "nic"]),
+    (r"firmware load.*failed", "firmware", "Firmware load failed", ["firmware", "failed"]),
+    (r"dpkg: error processing|post-installation script", "package", "dpkg package configure failure", ["dpkg", "package"]),
+    (r"core dumped|general protection fault", "userspace", "application core dump / segfault", ["core dump", "segfault"]),
 ]
 
 
@@ -163,10 +177,12 @@ class StubClient:
         for rx, sub, title, kws in _SIG_TO:
             if re.search(rx, blob):  # rx patterns are lowercase; blob is normalized
                 quote = next((l for l in self._lines if re.search(rx, l, re.IGNORECASE)), "")
+                if not quote:
+                    continue  # blob matched across collapsed line breaks; no verbatim quote
                 findings.append({
                     "title": title, "subsystem": sub, "severity": "high",
                     "severity_explanation": "stub", "root_cause_hypothesis": title,
-                    "evidence": [{"line": self._lines.index(quote) + 1 if quote else 1,
+                    "evidence": [{"line": self._lines.index(quote) + 1,
                                   "quote": quote, "why": "stub"}],
                     "causal_chain": "stub", "next_steps": ["stub"],
                 })
@@ -183,7 +199,14 @@ def run_case(case_dir: Path, client, triage: bool = True) -> dict:
     else:
         blocks_text = log_text  # A/B: hand the whole log over, no prefilter
     bundle = RawBundle(dmesg_text=log_text, kernel_version="eval", distro="eval", source="eval")
-    result, _ = run_analysis(client, bundle, blocks_text, "", lines, retries=0)
+    try:
+        result, _ = run_analysis(client, bundle, blocks_text, "", lines, retries=0)
+    except LLMError as e:
+        # one transient endpoint failure must not abort the whole benchmark
+        return {"status": "MISSED", "severity_ok": False, "evidence_ok": False,
+                "dismissal_ok": False, "findings_emitted": 0,
+                "expected_count": int(expect.get("expected_count", 1)),
+                "detail": f"LLM error: {e}"}
     if not isinstance(result, dict):
         return {"status": "MISSED", "severity_ok": False, "evidence_ok": False,
                 "dismissal_ok": False, "findings_emitted": 0, "expected_count": 1,
@@ -215,6 +238,7 @@ def aggregate(rows: dict[str, dict]) -> dict:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="run_eval")
     ap.add_argument("--live", action="store_true", help="call the real LLM endpoint")
+    ap.add_argument("--provider", help="LLM provider preset (local/deepseek/openai/anthropic/...)")
     ap.add_argument("--base-url"); ap.add_argument("--model"); ap.add_argument("--api-key")
     ap.add_argument("--json", action="store_true", help="emit metrics as JSON")
     ap.add_argument("--min-locate", type=float, default=0.0,
@@ -230,7 +254,8 @@ def main(argv=None) -> int:
 
     client = None
     if args.live:
-        cfg = load_config(base_url=args.base_url, model=args.model, api_key=args.api_key)
+        cfg = load_config(base_url=args.base_url, model=args.model, api_key=args.api_key,
+                          provider=args.provider)
         client = Client(cfg)
 
     def make_client(case):

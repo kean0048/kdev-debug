@@ -6,6 +6,7 @@ import getpass
 import shutil
 import subprocess
 import sys
+import threading
 
 MODES = ("auto", "terminal", "gui", "none")
 
@@ -16,29 +17,31 @@ class PassResolver:
             raise ValueError(f"askpass mode must be one of {MODES}")
         self.mode = mode
         self._cached: str | None = None
+        self._lock = threading.Lock()  # concurrent collectors must not double-prompt
 
     @property
     def has_password(self) -> bool:
         return self._cached is not None
 
     def get(self, prompt: str = "root privileges are required to collect logs") -> str | None:
-        if self._cached is not None:
-            return self._cached
-        if self.mode == "none":
-            return None
-        if self.mode in ("auto", "terminal"):
-            pwd = self._terminal(prompt)
-            if pwd is not None:
-                self._cached = pwd
-                return pwd
-            if self.mode == "terminal":
+        with self._lock:
+            if self._cached is not None:
+                return self._cached
+            if self.mode == "none":
                 return None
-        if self.mode in ("auto", "gui"):
-            pwd = self._gui(prompt)
-            if pwd:
-                self._cached = pwd
-                return pwd
-        return None
+            if self.mode in ("auto", "terminal"):
+                pwd = self._terminal(prompt)
+                if pwd is not None:
+                    self._cached = pwd
+                    return pwd
+                if self.mode == "terminal":
+                    return None
+            if self.mode in ("auto", "gui"):
+                pwd = self._gui(prompt)
+                if pwd:
+                    self._cached = pwd
+                    return pwd
+            return None
 
     def _terminal(self, prompt: str) -> str | None:
         if not sys.stdin.isatty():

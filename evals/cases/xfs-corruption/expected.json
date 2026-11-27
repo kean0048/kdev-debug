@@ -1,0 +1,10 @@
+{
+  "id": "xfs-corruption",
+  "description": "XFS metadata corruption requiring offline repair",
+  "expect": {
+    "subsystem": ["storage"],
+    "severity": ["high", "critical"],
+    "any_keywords": ["xfs", "corruption", "xfs_repair"],
+    "must_not_dismiss": []
+  }
+}

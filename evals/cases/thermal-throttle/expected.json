@@ -1,0 +1,10 @@
+{
+  "id": "thermal-throttle",
+  "description": "CPU thermal throttling escalating to a critical-temperature shutdown",
+  "expect": {
+    "subsystem": ["thermal"],
+    "severity": ["medium", "high"],
+    "any_keywords": ["thermal", "throttl", "temperature"],
+    "must_not_dismiss": []
+  }
+}

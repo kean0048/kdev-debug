@@ -1,0 +1,3 @@
+[  140.000000] systemd[1]: Starting foo.service...
+[  140.000010] someapp[123]: write failed: No space left on device
+[  140.000020] systemd[1]: foo.service: Failed with result 'exit-code'.

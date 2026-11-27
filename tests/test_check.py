@@ -53,3 +53,23 @@ def test_check_env_var_counts_as_configured(tmp_path, monkeypatch, capsys):
     _isolate(tmp_path, monkeypatch)
     monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9")
     assert cli._check_main(client=_FakeClient(["m1"])) == 0
+
+
+def test_check_accepts_provider_and_base_url_overrides(tmp_path, monkeypatch, capsys):
+    _isolate(tmp_path, monkeypatch)
+    rc = cli._check_main(["--provider", "local", "--base-url", "http://127.0.0.1:9"],
+                         client=_FakeClient(["chat-model"]))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "provider: local" in out
+    assert "http://127.0.0.1:9 (--base-url)" in out
+    assert "(auto-discover) → 'chat-model'" in out
+
+
+def test_check_provider_requiring_key_is_not_ready(tmp_path, monkeypatch, capsys):
+    _isolate(tmp_path, monkeypatch)
+    rc = cli._check_main(["--provider", "deepseek"], client=_FakeClient(["deepseek-chat"]))
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "DEEPSEEK_API_KEY" in out
+    assert "NOT ready" in out

@@ -1,0 +1,10 @@
+{
+  "id": "disk-full",
+  "description": "Filesystem full (ENOSPC) causing an application write failure",
+  "expect": {
+    "subsystem": ["disk-space"],
+    "severity": ["high"],
+    "any_keywords": ["space", "enospc", "disk"],
+    "must_not_dismiss": []
+  }
+}

@@ -1,8 +1,8 @@
 from dmesg_agent.executors import ExecResult
 from dmesg_agent.passwds import PassResolver
 from dmesg_agent.playbooks import (
-    DEEP_BY_SUBSYSTEM, run_deep, run_prefetch, subsystems_from_signatures,
-    subsystems_from_text,
+    CollectCmd, DEEP_BY_SUBSYSTEM, _run, run_deep, run_prefetch,
+    subsystems_from_signatures, subsystems_from_text,
 )
 
 
@@ -48,6 +48,16 @@ def test_deep_uses_sudo_and_limit():
     assert any("smartctl" in c for c in sudo_cmds), "storage deep verification should include a smartctl sudo command"
 
 
+def test_deep_exclude_skips_previous_commands():
+    first = run_deep(RecExecutor(), "NVMe bad sectors smartctl")
+    assert first
+    fresh = RecExecutor()
+    second = run_deep(fresh, "NVMe bad sectors smartctl",
+                      exclude={e.cmd for e in first})
+    assert second == []
+    assert fresh.runs == []
+
+
 def test_deep_skips_without_password():
     ex = RecExecutor()
     # mimic a real LocalExecutor with resolver=none: skip when no password is available
@@ -66,3 +76,60 @@ def test_prefetch_budget():
         {"oom", "nvme", "gpu-amd", "thermal", "net-link", "lockup", "mce", "usb", "firmware", "power"})))
     total = sum(len(e.output) for e in evs)
     assert total <= 30_000  # 20k budget + truncation slack on the last item
+
+
+def test_per_command_timeout_is_forwarded():
+    class TimeoutExec(RecExecutor):
+        def __init__(self):
+            super().__init__()
+            self.timeouts = []
+
+        def run(self, cmd, sudo=False, timeout=30):
+            self.timeouts.append(timeout)
+            return ExecResult(ok=True, out="x")
+
+    ex = TimeoutExec()
+    evs = _run(ex, [CollectCmd("a", "why", timeout=7), CollectCmd("b", "why")],
+               budget=1000, skip_sudo=False)
+    assert [e.cmd for e in evs] == ["a", "b"]
+    assert ex.timeouts == [7, 30]
+
+
+def test_local_collection_is_parallel_and_ordered():
+    import threading
+    import time
+
+    class ParallelExec(RecExecutor):
+        parallel_safe = True
+
+        def __init__(self):
+            super().__init__()
+            self.active = 0
+            self.max_active = 0
+            self.lock = threading.Lock()
+
+        def run(self, cmd, sudo=False, timeout=30):
+            with self.lock:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            time.sleep(0.08)
+            with self.lock:
+                self.active -= 1
+            return ExecResult(ok=True, out=cmd)
+
+    ex = ParallelExec()
+    evs = _run(ex, [CollectCmd(f"c{i}", "why") for i in range(4)],
+               budget=1000, skip_sudo=False)
+    assert [e.cmd for e in evs] == ["c0", "c1", "c2", "c3"]
+    assert ex.max_active > 1
+
+
+def test_serial_executor_stays_serial():
+    class SerialExec(RecExecutor):
+        parallel_safe = False
+
+    ex = SerialExec()
+    evs = _run(ex, [CollectCmd(f"c{i}", "why") for i in range(3)],
+               budget=1000, skip_sudo=False)
+    assert len(evs) == 3
+    assert ex.runs == [("c0", False), ("c1", False), ("c2", False)]

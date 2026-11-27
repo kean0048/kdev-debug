@@ -7,6 +7,10 @@ from dmesg_agent.knowledge import (
     _jaccard,
     cases_main,
     evidence_fingerprint,
+    find_confirmed_case,
+    find_confirmed_cases,
+    host_history,
+    log_fingerprint,
     record_run,
     text_words,
 )
@@ -247,3 +251,118 @@ def test_occurrence_evidence_is_stored(tmp_path):
     _run(db, [_oom(1, 10)])
     stored = json.loads(_rows(db, "SELECT evidence_json FROM occurrences")[0]["evidence_json"])
     assert "Out of memory" in stored[0]
+
+
+# ------------------------------------------------ prior-run context
+
+def test_host_history_returns_cases_and_last_run(tmp_path):
+    db = tmp_path / "kb.db"
+    _run(db, [_oom(1, 10)], host="host-a", now="2026-01-01T00:00:00")
+    h = host_history(db, "host-a")
+    assert h["host"] == "host-a"
+    assert h["cases"][0]["title"] == "OOM kill"
+    assert h["cases"][0]["status"] == "candidate"
+    assert h["last_run"]["findings"] == 1
+    assert h["last_run"]["verified_total"] == 0
+
+
+def test_host_history_is_host_scoped(tmp_path):
+    db = tmp_path / "kb.db"
+    _run(db, [_oom(1, 10)], host="host-a")
+    assert host_history(db, "host-b") is None
+
+
+def test_host_history_missing_db_returns_none(tmp_path):
+    assert host_history(tmp_path / "missing.db", "host-a") is None
+    assert not (tmp_path / "missing.db").exists(), "reading history must not create the DB"
+
+
+# ------------------------------------------------ confirmed-case fast path
+
+_OOM_LINE = ("[ 2345.679000] Out of memory: Killed process 4242 (chrome) "
+             "total-vm:1000kB, anon-rss:900kB")
+
+
+def _confirm_case(db, case_id):
+    assert cases_main(["--db", str(db), "confirm", str(case_id)]) == 0
+
+
+def test_fast_path_matches_confirmed_case_from_log(tmp_path):
+    db = tmp_path / "kb.db"
+    _run(db, [_oom(1, 10)], host="host-a")
+    case_id = _rows(db, "SELECT id FROM cases")[0]["id"]
+    _confirm_case(db, case_id)
+    tokens = log_fingerprint([_OOM_LINE]).tokens
+    match = find_confirmed_case(db, "host-a", tokens)
+    assert match is not None
+    assert match["case_id"] == case_id
+    assert match["title"] == "OOM kill"
+    assert match["score"] >= 0.7
+
+
+def test_fast_path_ignores_candidate_and_other_hosts(tmp_path):
+    db = tmp_path / "kb.db"
+    _run(db, [_oom(1, 10)], host="host-a")
+    case_id = _rows(db, "SELECT id FROM cases")[0]["id"]
+    tokens = log_fingerprint([_OOM_LINE]).tokens
+    assert find_confirmed_case(db, "host-a", tokens) is None, "candidate must not trigger fast path"
+    _confirm_case(db, case_id)
+    assert find_confirmed_case(db, "host-b", tokens) is None, "fast path is host-scoped"
+
+
+def test_fast_path_rejects_unrelated_log(tmp_path):
+    db = tmp_path / "kb.db"
+    _run(db, [_oom(1, 10)], host="host-a")
+    case_id = _rows(db, "SELECT id FROM cases")[0]["id"]
+    _confirm_case(db, case_id)
+    tokens = log_fingerprint(["[ 1.0] usb usb1: New USB device found, idVendor=1d6b"]).tokens
+    assert find_confirmed_case(db, "host-a", tokens) is None
+
+
+def test_fast_path_missing_db_is_none(tmp_path):
+    assert find_confirmed_case(tmp_path / "missing.db", "host-a", ["oom"]) is None
+
+
+def test_fast_path_matches_stored_evidence_across_boots(tmp_path):
+    db = tmp_path / "kb.db"
+    _run(db, [_oom(1, 10)], host="host-a")
+    case_id = _rows(db, "SELECT id FROM cases")[0]["id"]
+    _confirm_case(db, case_id)
+    current = ["Nov 28 03:00:00 host-a kernel: [ 999.0] Out of memory: "
+               "Killed process 777 (chrome) total-vm:88kB, anon-rss:77kB"]
+    match = find_confirmed_case(db, "host-a", [], log_lines=current)
+    assert match is not None
+    assert match["tier"] == "evidence"
+    assert match["score"] == 1.0
+    assert match["case_id"] == case_id
+
+
+def test_fast_path_matches_multiple_confirmed_cases(tmp_path):
+    db = tmp_path / "kb.db"
+    _run(db, [_oom(1, 10), _ata("ata6")], host="host-a")
+    ids = [r["id"] for r in _rows(db, "SELECT id FROM cases ORDER BY id")]
+    for cid in ids:
+        _confirm_case(db, cid)
+    current = [
+        "[ 999.0] Out of memory: Killed process 777 (chrome) "
+        "total-vm:88kB, anon-rss:77kB",
+        *ATA6,
+    ]
+    matches = find_confirmed_cases(db, "host-a", [], log_lines=current)
+    assert len(matches) == 2
+    assert {m["title"] for m in matches} == {"OOM kill", "ata6 link failure"}
+    assert all(m["tier"] == "evidence" for m in matches)
+    # the single-case wrapper still returns exactly one
+    assert find_confirmed_case(db, "host-a", [], log_lines=current)["case_id"] in ids
+
+
+def test_loose_normalize_strips_both_timestamp_styles():
+    from dmesg_agent.knowledge import loose_normalize
+    a = loose_normalize("[ 2345.679] I/O error, dev sda, sector 123")
+    b = loose_normalize("Nov 28 03:00:00 pgx kernel: I/O error, dev sda, sector 987")
+    assert a == b == "i/o error, dev sda, sector <n>"
+
+
+def test_nvrm_error_code_enters_fingerprint():
+    fp = evidence_fingerprint(["[1.0] NVRM: Out of memory [NV_ERR_NO_MEMORY] (0x51)"])
+    assert "nv_err=no_memory" in fp.tokens

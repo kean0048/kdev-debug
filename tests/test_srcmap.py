@@ -1,7 +1,7 @@
 import subprocess
 from pathlib import Path
 
-from dmesg_agent.srcmap import SrcMap, extract_symbols
+from dmesg_agent.srcmap import SrcMap, extract_symbols, kernel_includes_tag
 
 TRACE = [
     "[ 3456.789150] RIP: 0010:ext4_writepages+0x1a2/0x4d0 [ext4]",
@@ -84,3 +84,32 @@ def test_render(tmp_path):
     text, infos = sm.render([("ext4_writepages", "ext4"), ("wb_workfn", "")])
     assert "fs/ext4/inode.c" in text and "Recent commits" in text
     assert len(infos) == 2
+
+
+def test_kernel_includes_tag_versions():
+    assert kernel_includes_tag("6.12.11+deb13-amd64", "v6.12") is True
+    assert kernel_includes_tag("6.11.0", "v6.12") is False
+    assert kernel_includes_tag("7.0.0-1025-nvidia", "v7.0-rc1") is True
+    assert kernel_includes_tag("6.12.0-rc1", "v6.12") is False
+    assert kernel_includes_tag("unknown", "v6.12") is None
+
+
+def test_lookup_finds_fix_candidates(tmp_path):
+    tree = make_tree(tmp_path)
+    _git(tree, "tag", "v7.0-rc1")
+    sm = SrcMap(str(tree), cache_dir=tmp_path / "cache")
+    sm.build_index()
+    info = sm.lookup("ext4_writepages", module="ext4")
+    assert info.fixes
+    assert "fix ret init" in info.fixes[0]["subject"]
+    assert info.fixes[0]["first_tag"] == "v7.0-rc1"
+
+
+def test_render_fix_status_for_running_kernel(tmp_path):
+    tree = make_tree(tmp_path)
+    _git(tree, "tag", "v7.0-rc1")
+    sm = SrcMap(str(tree), cache_dir=tmp_path / "cache")
+    text, _ = sm.render([("ext4_writepages", "ext4")], running_kernel="7.4.0")
+    assert "Fix candidates" in text and "at or after it upstream" in text
+    text2, _ = sm.render([("ext4_writepages", "ext4")], running_kernel="6.11.0")
+    assert "NOT in the running kernel" in text2 and "backport" in text2

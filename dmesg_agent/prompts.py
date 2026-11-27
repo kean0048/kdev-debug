@@ -67,7 +67,7 @@ USER_TEMPLATE = """[Source] {source}
 [Distro] {distro}
 [System context]
 {context}
-{scan}{prefetch}{source_ctx}
+{scan}{history}{facts}{prefetch}{source_ctx}
 Below are preselected suspicious log segments. Each line is formatted as `line_number: original text`, where line_number is the true line number in the original log:
 
 {blocks}
@@ -93,20 +93,55 @@ Rules:
 
 
 def build_messages(bundle: RawBundle, blocks_text: str, prefetch_text: str = "",
-                   source_text: str = "", scan_text: str = "") -> list[dict]:
+                   source_text: str = "", scan_text: str = "",
+                   history_text: str = "", facts_text: str = "") -> list[dict]:
     context = json.dumps(bundle.extra_context, ensure_ascii=False, indent=2) if bundle.extra_context else "(none)"
     prefetch = f"[Prefetched system state]\n{prefetch_text}\n" if prefetch_text else ""
     scan = (f"[Proactive system scan — problems that do not appear in the kernel log]\n"
             f"{scan_text}\n") if scan_text else ""
+    history = (f"[Case history on this host — prior runs, not evidence]\n{history_text}\n"
+               f"Re-check these expectations against the current log and report what changed.\n"
+               ) if history_text else ""
+    facts = (f"[Deterministic facts — extracted by rules from the log and collected output]\n"
+             f"{facts_text}\n"
+             f"These facts are authoritative; do not contradict them. Use them to anchor "
+             f"severity, victim processes and device identity.\n") if facts_text else ""
     source_ctx = f"\n{source_text}\n" if source_text else ""
     user = USER_TEMPLATE.format(
         source=bundle.source, kernel=bundle.kernel_version, distro=bundle.distro,
-        context=context, scan=scan, prefetch=prefetch, source_ctx=source_ctx, blocks=blocks_text,
+        context=context, scan=scan, history=history, facts=facts, prefetch=prefetch,
+        source_ctx=source_ctx, blocks=blocks_text,
     )
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user},
     ]
+
+
+def render_history(history: dict | None, max_chars: int = 2_000) -> str:
+    """Compact prior-run context for the analysis prompt (token-bounded)."""
+    if not history:
+        return ""
+    parts: list[str] = []
+    last = history.get("last_run")
+    if last:
+        summary = " ".join(str(last.get("summary", "")).split())[:400]
+        parts.append(
+            f"Previous run {last.get('ts', '?')}: {summary} "
+            f"(findings={last.get('findings', 0)}, evidence verified "
+            f"{last.get('verified_pass', 0)}/{last.get('verified_total', 0)})")
+    cases = history.get("cases") or []
+    if cases:
+        parts.append("Known cases from earlier runs on this host:")
+        for c in cases:
+            title = " ".join(str(c.get("title", "")).split())[:120]
+            parts.append(f"- #{c.get('id')} [{c.get('status')}] "
+                         f"{c.get('subsystem') or '?'}: {title} "
+                         f"(seen x{c.get('occurrences', 0)}, last {c.get('last_seen', '?')})")
+    text = "\n".join(parts)
+    if len(text) > max_chars:
+        text = text[:max_chars].rsplit("\n", 1)[0] + "\n... (history truncated) ..."
+    return text
 
 
 def render_prefetch(evidences) -> str:

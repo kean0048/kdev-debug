@@ -1,0 +1,10 @@
+{
+  "id": "net-link-flap",
+  "description": "NIC link repeatedly going down and up (link flap)",
+  "expect": {
+    "subsystem": ["network"],
+    "severity": ["medium", "high"],
+    "any_keywords": ["link", "nic", "network"],
+    "must_not_dismiss": []
+  }
+}

@@ -2,15 +2,18 @@
 
 A [sashiko](https://sashiko.dev)-style AI diagnosis agent for kernel logs. Feed it a dmesg and the LLM **triages issues into three tiers** (confirmed / open questions / dismissed); for each open question it **automatically collects deeper data and re-verifies it** (prompting for a password when root is needed); every piece of evidence is **matched verbatim** against the raw data to prevent hallucination.
 
-Pipeline (v0.5):
+Pipeline (v0.6):
 
 ```
 collect → triage prefilter → proactive system scan (when the log is quiet) + system-change
         correlation (reboots, kernel/package installs, suspend/resume around the first fault)
-        + deterministic prefetch
+        + deterministic prefetch → deterministic facts (rule-extracted) + host case history
+        → confirmed-case fast path (skip deep collection when a confirmed case matches)
         → LLM three-tier analysis
-        → per inconclusive item: whitelisted playbook collection (sudo prompt) → LLM verdict re-check
+        → per inconclusive item: whitelisted playbook collection (sudo prompt) → LLM verdict;
+          still inconclusive → follow-up round routed by the stated gap (up to --deep-rounds)
         → verbatim evidence check → verdict-first Markdown / brief / HTML report
+        → run archive (full LLM I/O + context, replayable)
 ```
 
 The report leads with a **verdict box** — system health, the top three issues, a "DO NOW"
@@ -44,7 +47,7 @@ dmesg-agent --ssh user@10.0.0.5 --ssh-password   # password login: prompted (hid
 
 When deep verification hits a collection command that needs root: it asks for the password via hidden terminal input; with no terminal but a desktop session available it falls back to a `zenity`/`kdialog` password dialog; `--askpass none` disables this (those commands are skipped). The password is kept in process memory only.
 
-Common options: `--no-deep` (skip deep verification), `--no-prefetch`, `--max-verify N`, `--no-triage`, `--json`, `--askpass auto|terminal|gui|none`, `--max-tokens`.
+Common options: `--no-deep` (skip deep verification), `--no-prefetch`, `--max-verify N`, `--deep-rounds N`, `--no-triage`, `--json`, `--askpass auto|terminal|gui|none`, `--max-tokens`.
 
 ### Option reference
 
@@ -82,9 +85,10 @@ Pipeline switches:
 | `--no-scan` | never run the proactive scan |
 | `--no-deep` | skip deep verification of open questions |
 | `--max-verify N` | cap on deep-verified concerns (default 5) |
-| `--no-knowledge` | do not record this run into the per-host case library |
+| `--deep-rounds N` | max collection rounds per open question (default 2; a second round is routed by the model's stated gap) |
+| `--no-knowledge` | do not record this run into the per-host case library (history injection and fast path are skipped too) |
 | `--knowledge-db PATH` | case-library SQLite path (or env `DMESG_AGENT_KNOWLEDGE_DB`) |
-| `--host-id ID` | host identity for the case library (default: the analyzed machine's machine-id) |
+| `--host-id ID` | host identity for the case library (default: machine-id on live/SSH; hostname parsed from journalctl lines for `--file`; the file name is a warned last resort) |
 | `--kmatch-threshold F` | similar-case recall threshold (default 0.65) |
 
 Advanced forensics (require an executor; each degrades to a "skipped" note if its tool is missing):
@@ -102,7 +106,8 @@ LLM backend & output:
 
 | Option | Meaning |
 |---|---|
-| `--base-url URL` / `--model NAME` / `--api-key KEY` | OpenAI-compatible endpoint overrides (env or config file also work) |
+| `--provider NAME` | provider preset: `local`, `vllm`, `ollama`, `deepseek`, `openai`/`gpt`, `anthropic`/`claude`, `gemini`, `openrouter`, `custom` |
+| `--base-url URL` / `--model NAME` / `--api-key KEY` | endpoint/model/key overrides on top of the preset |
 | `--max-tokens N` | model output ceiling (default 32768; a truncation warning is printed if hit) |
 | `-o, --output PATH` | write the Markdown report to a file (default: stdout) |
 | `--brief` | verdict box + findings table + next actions only (triage-sized) |
@@ -122,9 +127,11 @@ Subcommands:
 | `dmesg-agent cases list\|show\|confirm\|dismiss\|fixed` | inspect and manage the per-host case library |
 | `dmesg-agent score [--record] [--live] [--note TEXT]` | compute the weekly software scorecard; `--record` writes `dmesg_agent/scorecards/<week>.json` + `SCORECARD.md` |
 
-Environment variables: `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN` (fallback), `DMESG_AGENT_SSH_PASSWORD`, `DMESG_AGENT_KERNEL_SRC`, `DMESG_AGENT_VMLINUX`, `DMESG_AGENT_KNOWLEDGE_DB`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` (case-library location). Config precedence everywhere: CLI flag > env var > config file > default.
+Environment variables: `DMESG_AGENT_PROVIDER`, `DMESG_AGENT_BASE_URL`, `DMESG_AGENT_MODEL`, `DMESG_AGENT_API_KEY`, `DMESG_AGENT_EXTRA_BODY` (JSON object merged into the request body), `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` (fallback), `ANTHROPIC_BASE_URL` (Anthropic provider only), `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `OPENROUTER_API_KEY`, `DMESG_AGENT_SSH_PASSWORD`, `DMESG_AGENT_KERNEL_SRC`, `DMESG_AGENT_VMLINUX`, `DMESG_AGENT_KNOWLEDGE_DB`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` (case-library location; falls back to state/cache/temp when unwritable). Config precedence everywhere: CLI flag > env var > config file > provider preset > default.
 
-Always on, no flag: model output streams live to stderr; confirmed findings are fingerprinted into the per-host case library and re-appear as "🔁 Recurrence" annotations.
+Always on, no flag: model output streams live to stderr; confirmed findings are fingerprinted into the per-host case library and re-appear as "🔁 Recurrence" annotations; the host's prior cases and last run summary are injected into the prompt as non-evidence context; every run is archived under `$XDG_DATA_HOME/dmesg-agent/runs/` (gzip JSON, mode 0600, newest 200 kept) with the full LLM request/response exchanges, triage blocks, collected context and final result — the replay/audit trail that makes a diagnosis debuggable.
+
+If the preferred data directory is not writable (a classic cause: an earlier `sudo dmesg-agent` left `~/.local/share/dmesg-agent` owned by root), the case library and archive fall back to `$XDG_STATE_HOME`, `$XDG_CACHE_HOME`, then a per-UID temp directory, with a warning and the exact `chown` fix. A run that fails at the LLM step still writes an archive containing the collected data and the error, so the failure itself is replayable.
 
 ### Case library (shadow mode)
 
@@ -137,7 +144,11 @@ dmesg-agent cases confirm 3             # eligible for the future fast path
 dmesg-agent cases fixed 3               # a recurrence reopens it (regression flag)
 ```
 
-Matching is two-tier: an **exact** fingerprint match (same fault on the same host) versus a **similar** case recalled by token-set Jaccard ≥ `--kmatch-threshold` (0.65). Shadow mode records and reports every match — it never changes the analysis. Confirmed cases are the prerequisite for the planned fast path, where an exact hit skips full analysis and the model only judges the delta against the stored case.
+Matching is two-tier: an **exact** fingerprint match (same fault on the same host) versus a **similar** case recalled by token-set Jaccard ≥ `--kmatch-threshold` (0.65). Recording stays in shadow mode — it never silently changes a conclusion.
+
+**Fast path**: before the first LLM pass the raw suspicious log is fingerprinted and compared against the host's **confirmed** cases (evidence-kind only, containment ≥ 0.7 with ≥5 shared tokens). On a hit the stored case is injected into the prompt with an instruction to judge only the delta, and deep collection is skipped (one analysis pass still runs so every evidence quote remains verifiable against the current log). The report shows a `fast path · case #N` chip.
+
+**Prior context**: before analysis, `host_history()` reads the host's recent cases and last run summary and injects them as explicitly non-evidence context, so a machine that keeps failing is judged with its own history in view.
 
 ### Weekly scorecard
 
@@ -167,6 +178,8 @@ dmesg-agent --file dmesg.txt --kernel-src /works/Linux-debugs/linux-src
 
 Flow: extract `func+0x…[module]` symbols → function-definition index (built on first use, cached under `~/.cache/dmesg-agent/`, invalidated when the tree HEAD changes) → function bodies (≤120 lines) plus the file's recent commits → injected into the model context and attached to the report. When the source tree version differs from the running kernel, the report notes that "function bodies may be offset".
 
+**Known-fix candidates**: for each correlated file the module also lists recent commits whose subject mentions a fix, with the first release tag that contains each commit (`git describe --contains`) and a version comparison against the running kernel — "already upstream as of vX" versus "NOT in the running kernel; candidate for upgrade/backport (check the distro changelog)". This is deliberately labeled a *candidate*: the report never claims a commit is the root-cause fix without human confirmation, and distro backports can change the picture.
+
 ### Result presentation
 
 - **Verdict-first**: the Markdown report opens with a boxed `HEALTH:` line, the top three issues, a `DO NOW` action list (de-duplicated next steps from the most severe findings) and evidence/recurrence chips, before any detail.
@@ -174,6 +187,7 @@ Flow: extract `func+0x…[module]` symbols → function-definition index (built 
 - `--html PATH` writes one self-contained file (inline CSS, no scripts, everything escaped): severity-colored cards, verbatim evidence tables, a timeline of suspect segments, collapsible appendices, print/PDF friendly.
 - `--color auto|always|never` colorizes stdout (auto = TTY only; honors `NO_COLOR`).
 - When the case library knows the host's previous run, the report and verdict show **"Since the previous run: +N new / -M resolved / K ongoing"**.
+- A **deterministic-facts appendix** lists rule-extracted facts (OOM victims, hung tasks, per-device I/O/fs error counts, NVRM allocation failures, SMART attributes, failed units, full disks, load/memory) — extracted without the model and injected into the prompt as facts the model must not contradict.
 - The footer records the tool version and the committed weekly software score.
 
 ### System-change correlation
@@ -212,8 +226,9 @@ known-answer cases scored automatically.
 
 ```bash
 dmesg-agent eval                    # offline self-test (stub client; also runs under pytest)
-dmesg-agent eval --live --min-locate 0.8   # real endpoint, fail CI below 80% detect
-dmesg-agent eval --live --json               # machine-readable metrics
+dmesg-agent eval --live --provider deepseek   # real endpoint via a provider preset
+dmesg-agent eval --live --min-locate 0.8      # fail below 80% detect
+dmesg-agent eval --live --json                 # machine-readable metrics
 python evals/run_eval.py ...        # the same harness directly (git checkout only)
 ```
 
@@ -233,26 +248,69 @@ dismissal_rate / noise_rate`. Add a case by dropping in a log whose root
 cause you know plus its expected.json — the offline pytest guard
 (`tests/test_eval.py`) keeps the harness honest.
 
+The suite includes real captured logs (e.g. the `nvidia-nvrm-oom` and
+`xhci-unknown-stream` cases come from a thinkstationpgx running
+`7.0.0-1025-nvidia`) alongside the smaller known-answer fixtures.
+
 ## LLM backend
 
-Any OpenAI-compatible API. Default `http://192.168.8.43:19527`; override with the `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY` environment variables, or directly with `--base-url http://host:port`.
-
-You can also persist settings instead of passing them every time:
+Any OpenAI-compatible API, plus a native Anthropic Messages client. Default
+`http://192.168.8.43:19527`; override per run with `--provider`, `--base-url`,
+`--model`, `--api-key`, or persist a preset.
 
 ```bash
-dmesg-agent config set base_url http://host:port   # also model / api_key / max_tokens / timeout
-dmesg-agent config show                             # saved settings + current effective values
-dmesg-agent config unset api_key
-dmesg-agent check                             # am I ready? shows each item + what still needs setting
+dmesg-agent config providers                 # list presets, URLs, default models, key envs
+
+# local vLLM / LM Studio / llama.cpp (OpenAI-compatible)
+dmesg-agent config use local --base-url http://192.168.1.70:8080
+dmesg-agent config use ollama               # http://127.0.0.1:11434
+dmesg-agent config use vllm                 # http://127.0.0.1:8000
+
+# hosted providers: the API key comes from the documented env var
+export DEEPSEEK_API_KEY=...                 # config use deepseek (deepseek-chat)
+export OPENAI_API_KEY=...                   # config use openai  / gpt
+export ANTHROPIC_API_KEY=...                # config use anthropic / claude (native Messages API)
+export GEMINI_API_KEY=...                   # config use gemini (OpenAI-compatible endpoint)
+export OPENROUTER_API_KEY=...               # config use openrouter
+dmesg-agent config use deepseek
+dmesg-agent check                           # resolve provider/model, probe the endpoint
+dmesg-agent check --provider local --base-url http://127.0.0.1:8000  # one-off probe
+
+# provider-specific escape hatch: disable Qwen3 thinking on vLLM/Strata
+dmesg-agent config set extra_body '{"chat_template_kwargs":{"enable_thinking":false}}'
+# or one-off: DMESG_AGENT_EXTRA_BODY='{"reasoning_effort":"none"}' dmesg-agent ...
 ```
 
-The config file lives at `~/.config/dmesg-agent/config.json` (honors `XDG_CONFIG_HOME`, saved with mode 0600; `api_key` is stored there). Effective precedence: CLI flag > environment variable > config file > default.
+`config use` writes the provider, base URL, model and auth style into
+`~/.config/dmesg-agent/config.json` (mode 0600). A model left unset is
+auto-discovered from the server's models endpoint, preferring chat models over
+embedding/audio ones. One-off overrides: `dmesg-agent --provider deepseek
+--model deepseek-reasoner ...`. Generic automation env vars:
+`DMESG_AGENT_PROVIDER`, `DMESG_AGENT_BASE_URL`, `DMESG_AGENT_MODEL`,
+`DMESG_AGENT_API_KEY`.
+
+```bash
+dmesg-agent config show                      # saved settings + effective provider/style/key source
+dmesg-agent config set temperature 0.2       # low-level setters (provider/base_url/model/api_key/...)
+dmesg-agent config unset api_key
+dmesg-agent check                            # ready or not, with the exact missing piece
+```
+
+The native Anthropic path uses `x-api-key` + `anthropic-version` and
+`/v1/messages`; the OpenAI-compatible path uses `/chat/completions` with
+`max_tokens` or `max_completion_tokens` per provider. On a 400 that rejects
+`temperature` or the token field, the client retries once with the unsupported
+field removed. Effective precedence: CLI flag > operation-specific env >
+`DMESG_AGENT_*` > provider key env > config file > provider preset > built-in
+default.
 
 ## Design (engineering ideas borrowed from sashiko)
 
 - **Three-tier routing**: the model must split its judgments into `findings` (sufficient evidence) / `inconclusive_concerns` (with a `verification_question` stating what data is still missing) / `dismissed_concerns` (must give a verbatim counter-quote; no dismissal without evidence)
 - **prefetch**: before the first analysis, system state is collected **deterministically** based on the signatures triage matched (no sudo, capped at 20K characters), removing blind model guessing
-- **deep verification**: for each open question, specialized data (SMART, NIC error counters, historical journal, hwmon, …) is collected via the subsystem's **declarative whitelist playbook** (`playbooks.py`), and the model renders a final confirmed/dismissed/inconclusive verdict from the new data; `--max-verify` caps the total
+- **deep verification**: for each open question, specialized data (SMART, NIC error counters, historical journal, hwmon, …) is collected via the subsystem's **declarative whitelist playbook** (`playbooks.py`), and the model renders a final confirmed/dismissed/inconclusive verdict from the new data; `--max-verify` caps the total, and an inconclusive verdict triggers a follow-up round routed by the model's stated gap (bounded by `--deep-rounds`, commands already run are excluded)
+- **deterministic facts before the model**: rule-based extraction (`facts.py`) of OOM victims, hung tasks, per-device I/O/fs errors, NVRM allocation failures, SMART attributes, failed units, full disks, load/memory — injected as authoritative facts and rendered as an appendix; the model is told not to contradict them
+- **fast path for confirmed cases**: raw-log structural fingerprint vs. the host's confirmed cases; a hit skips deep collection and asks the model to judge only the delta, while still verifying every quote against the current log
 - **the model cannot run commands**: any "command suggestion" from the log or the model is never executed — only the playbook whitelist runs (log-injection defense)
 - **feedback retry**: when the JSON is invalid or an evidence reference cannot be found, the precise violation list is fed back to the model for one retry (with a budget; no infinite loop)
 - **anti-hallucination verify**: every evidence quote is compared verbatim (after normalization) against the corpus (original log + collected output); line-number offsets are auto-corrected and the pass rate is written into the report header

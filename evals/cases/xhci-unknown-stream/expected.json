@@ -1,0 +1,10 @@
+{
+  "id": "xhci-unknown-stream",
+  "description": "Real log from thinkstationpgx (previous boot): the xHCI controller keeps reporting transfer events for an unknown stream ring slot, a USB endpoint/stream teardown anomaly.",
+  "expect": {
+    "subsystem": ["usb"],
+    "severity": ["medium", "high"],
+    "any_keywords": ["xhci", "usb", "stream ring", "transfer event"],
+    "must_not_dismiss": []
+  }
+}

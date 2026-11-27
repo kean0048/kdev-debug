@@ -288,6 +288,17 @@ def render_html(result: dict | None, bundle: RawBundle, summary: VerifySummary,
 
     out.append(_timeline(blocks, lines))
 
+    facts = [f for f in (result.get("facts") or []) if isinstance(f, dict)]
+    if facts:
+        rows = "".join(
+            f"<tr><td>{_e(str(f.get('kind', '?')))}</td>"
+            f"<td><code>{_e(str(f.get('key', '?')))}</code></td>"
+            f"<td>{_e(str(f.get('value', '')))}{(' · line ' + str(f['line'])) if f.get('line') else ''}</td></tr>"
+            for f in facts)
+        out.append("<details open><summary>Appendix: deterministic facts "
+                   "(rule-extracted)</summary><table><thead><tr><th>Kind</th><th>Key</th>"
+                   f"<th>Value</th></tr></thead><tbody>{rows}</tbody></table></details>")
+
     if changes_text:
         out.append("<details><summary>Appendix: system changes around the fault</summary>"
                    f"<pre>{_e(_trim(changes_text, 8000))}</pre></details>")

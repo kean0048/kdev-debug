@@ -1,0 +1,10 @@
+{
+  "id": "usb-disconnect",
+  "description": "Repeated USB device disconnect and re-enumeration",
+  "expect": {
+    "subsystem": ["usb"],
+    "severity": ["medium", "high"],
+    "any_keywords": ["usb", "disconnect"],
+    "must_not_dismiss": []
+  }
+}

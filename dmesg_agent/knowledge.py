@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .paths import data_dir
 from .playbooks import subsystems_from_signatures
 from .triage import SIGNATURES
 
@@ -44,9 +45,14 @@ STATUSES = ("candidate", "confirmed", "dismissed", "fixed")
 # ---------------------------------------------------------------- regexes
 
 _TS_RE = re.compile(r"^\s*\[[^\]]*\]\s*")
+_JOURNAL_TS_RE = re.compile(
+    r"^[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+\S+:\s*")
 _HEX_RE = re.compile(r"0x[0-9a-fA-F]+")
 _NUM_RE = re.compile(r"\b\d+\b")
+_FLOAT_RE = re.compile(r"\b\d+\.\d+\b")
+_LOOSE_NUM_RE = re.compile(r"\d+")  # also inside units: 10kB / 0.5%
 _CODE_RE = re.compile(r"\b(serr|emask|errno)\s*[:=]?\s*(0x[0-9a-fA-F]+|-?\d+)", re.IGNORECASE)
+_NV_ERR_RE = re.compile(r"\b(NV_ERR_[A-Z0-9_]+)\b")
 _DEV_RE = re.compile(
     r"\b(ata\d+(?:\.\d+)?|nvme\d+(?:n\d+)?(?:p\d+)?|sd[a-z]+\d*|dm-\d+|md\d+|loop\d+"
     r"|wl[a-z0-9]+|enp\d+s\d+|eth\d+)\b", re.IGNORECASE)
@@ -111,6 +117,8 @@ def evidence_fingerprint(quotes: list[str]) -> Fingerprint:
             codes.add(f"{word}={int(val, 16)}")
         elif word == "errno":
             codes.add(f"errno={int(val)}")
+    for m in _NV_ERR_RE.finditer(text):
+        codes.add("nv_err=" + m.group(1).lower().removeprefix("nv_err_"))
     subsystems = set(subsystems_from_signatures(set(sig)))
     for d in devices:
         if d.startswith(("ata", "sd", "nvme", "dm-", "md", "loop")):
@@ -212,8 +220,7 @@ CREATE INDEX IF NOT EXISTS idx_cases_host ON cases(scope_host, last_seen);
 
 
 def default_db_path() -> Path:
-    root = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
-    return Path(root) / "dmesg-agent" / "knowledge.db"
+    return data_dir() / "knowledge.db"
 
 
 def resolve_db_path(cli_path: str | None = None) -> Path:
@@ -307,6 +314,146 @@ def record_run(db_path, host: str, result: dict, *, kernel: str = "", source: st
                            if m["tier"] in ("exact", "merged") and m["occurrences"] >= 2),
         "diff": diff,
     }
+
+
+def host_history(db_path, host: str, limit: int = 8) -> dict | None:
+    """Read prior context for this host (read-only; never creates the DB).
+
+    Returns ``{"host", "cases", "last_run"}`` or None when there is nothing to
+    show. The analysis prompt renders this before the first LLM pass so a
+    repeatedly-failing machine is judged with its own history in view.
+    """
+    path = Path(db_path)
+    if not path.exists():
+        return None
+    conn = _connect(path)
+    try:
+        cases = [dict(r) for r in conn.execute(
+            "SELECT id, title, subsystem, severity, status, occurrences, last_seen, "
+            "root_cause FROM cases WHERE scope_host=? ORDER BY last_seen DESC LIMIT ?",
+            (host, max(1, limit))).fetchall()]
+        last = conn.execute(
+            "SELECT ts, summary, findings, verified_pass, verified_total FROM runs "
+            "WHERE host=? ORDER BY id DESC LIMIT 1", (host,)).fetchone()
+    except sqlite3.Error as e:
+        raise KnowledgeError(f"knowledge base read failed: {e}") from e
+    finally:
+        conn.close()
+    if not cases and last is None:
+        return None
+    return {"host": host, "cases": cases, "last_run": dict(last) if last else None}
+
+
+def log_fingerprint(lines: list[str]) -> Fingerprint:
+    """Structural fingerprint of the suspicious log content itself.
+
+    Unlike ``fingerprint_for_finding`` this runs before the LLM, so the fast
+    path can recognize a known fault from the raw log alone.
+    """
+    return evidence_fingerprint(["\n".join(lines)])
+
+
+def _containment(a: set, b: set) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / min(len(a), len(b))
+
+
+def loose_normalize(line: str) -> str:
+    """Normalize a log line/quote for cross-run recurrence matching.
+
+    Strips both `[monotonic]` and journalctl `Mon DD HH:MM:SS host unit:`
+    prefixes and wildcards volatile numbers/hex, so the same fault line on the
+    same boot or a later boot maps to the same text.
+    """
+    s = str(line or "").strip()
+    s = _JOURNAL_TS_RE.sub("", s)
+    s = _TS_RE.sub("", s)
+    s = _FLOAT_RE.sub("<n>", s)
+    s = _HEX_RE.sub("<hex>", s)
+    s = _LOOSE_NUM_RE.sub("<n>", s)
+    return " ".join(s.split()).casefold()
+
+
+def find_confirmed_cases(db_path, host: str, tokens: list[str],
+                         log_lines: list[str] | None = None,
+                         threshold: float = 0.7, limit: int = 5) -> list[dict]:
+    """All confirmed cases on this host that match the current log.
+
+    Primary signal: one of the case's stored verbatim evidence quotes recurs in
+    the current log after loose normalization (timestamps/numbers wildcarded) —
+    precise and directly tied to the actual fault line. Fallback: token-set
+    containment (superset-safe) with at least 5 shared tokens. Matching every
+    case matters on machines with several known faults (e.g. two SATA links).
+    """
+    path = Path(db_path)
+    if not path.exists():
+        return []
+    want = set(tokens)
+    log_norm = [loose_normalize(l) for l in (log_lines or [])]
+    exact: list[dict] = []
+    fallback: list[tuple[dict, float]] = []
+    seen: set[int] = set()
+    conn = _connect(path)
+    try:
+        rows = conn.execute(
+            "SELECT id, title, subsystem, severity, root_cause, occurrences, "
+            "last_seen, tokens_json FROM cases "
+            "WHERE scope_host=? AND status='confirmed' AND fp_kind='evidence' "
+            "ORDER BY last_seen DESC LIMIT 20", (host,)).fetchall()
+        for row in rows:
+            hit = False
+            for occ in conn.execute(
+                    "SELECT evidence_json FROM occurrences WHERE case_id=? "
+                    "ORDER BY id DESC LIMIT 2", (row["id"],)):
+                for quote in (json.loads(occ["evidence_json"]) or [])[:2]:
+                    q = loose_normalize(quote)
+                    if len(q) >= 12 and any(q in ln or ln in q for ln in log_norm):
+                        info = _case_info(row)
+                        info.update(tier="evidence", score=1.0)
+                        exact.append(info)
+                        seen.add(row["id"])
+                        hit = True
+                        break
+                if hit:
+                    break
+            if hit:
+                continue
+            if want:
+                cand = set(json.loads(row["tokens_json"]))
+                shared = len(want & cand)
+                score = _containment(want, cand)
+                if shared >= 5 and score >= threshold:
+                    fallback.append((dict(row), score))
+    except sqlite3.Error as e:
+        raise KnowledgeError(f"knowledge base read failed: {e}") from e
+    finally:
+        conn.close()
+    out = exact[:limit]
+    for row, score in sorted(fallback, key=lambda x: -x[1]):
+        if len(out) >= limit:
+            break
+        if row["id"] in seen:
+            continue
+        info = _case_info(row)
+        info.update(tier="tokens", score=round(score, 3))
+        out.append(info)
+    return out
+
+
+def find_confirmed_case(db_path, host: str, tokens: list[str],
+                        log_lines: list[str] | None = None,
+                        threshold: float = 0.7) -> dict | None:
+    matches = find_confirmed_cases(db_path, host, tokens, log_lines=log_lines,
+                                   threshold=threshold, limit=1)
+    return matches[0] if matches else None
+
+
+def _case_info(row: sqlite3.Row) -> dict:
+    return {"case_id": row["id"], "title": row["title"],
+            "subsystem": row["subsystem"], "severity": row["severity"],
+            "root_cause": row["root_cause"], "occurrences": row["occurrences"],
+            "last_seen": row["last_seen"]}
 
 
 def _run_diff(conn: sqlite3.Connection, prev_uuid: str | None,

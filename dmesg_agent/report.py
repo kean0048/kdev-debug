@@ -113,6 +113,11 @@ def build_verdict(result: dict | None, summary: VerifySummary) -> dict:
     if deep:
         chips.append(f"deep-verified {deep}")
     kb = result.get("knowledge") or {}
+    fast = kb.get("fast_path_cases") or ([kb["fast_path"]] if kb.get("fast_path") else [])
+    if fast:
+        ids = ", ".join(f"#{c.get('case_id')}" for c in fast
+                        if isinstance(c, dict) and c.get("case_id") is not None)
+        chips.append(f"fast path · {ids}" if ids else "fast path")
     if kb.get("recurrences"):
         chips.append(f"recurring {kb['recurrences']}")
     diff = kb.get("diff")
@@ -199,7 +204,8 @@ def render(result: dict | None, bundle: RawBundle, summary: VerifySummary,
 
     dd = result.get("deep_dive_summary")
     if dd:
-        out.append(f"- Deep verification: {dd.get('attempted', 0)} attempted → "
+        out.append(f"- Deep verification: {dd.get('attempted', 0)} attempted in "
+                   f"{dd.get('rounds', 0)} collection round(s) → "
                    f"confirmed {dd.get('confirmed', 0)}, dismissed {dd.get('dismissed', 0)},"
                    f" still inconclusive {dd.get('inconclusive', 0)}"
                    + (f", failed {dd.get('skipped', 0)}" if dd.get("skipped") else ""))
@@ -307,6 +313,19 @@ def render(result: dict | None, bundle: RawBundle, summary: VerifySummary,
                        f"\n  - Counter-evidence: `{_esc(d.get('counter_evidence_quote', ''))[:120]}`")
         for n in non_issues:
             out.append(f"- {n}")
+        out.append("")
+
+    facts = result.get("facts") or []
+    if facts:
+        out.append("## Appendix: deterministic facts (rule-extracted)\n")
+        out.append("> Extracted without the model from the log and collected output; the "
+                   "LLM was instructed not to contradict these.\n")
+        for f in facts:
+            if not isinstance(f, dict):
+                continue
+            loc = f" (line {f['line']})" if f.get("line") else ""
+            out.append(f"- **{f.get('kind', '?')}** `{_esc(str(f.get('key', '?')))}`: "
+                       f"{_esc(str(f.get('value', '')))}{loc}")
         out.append("")
 
     if changes_text:

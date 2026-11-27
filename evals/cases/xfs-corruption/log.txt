@@ -1,0 +1,3 @@
+[   80.000000] XFS (nvme0n1p2): Metadata corruption detected at 0xffff00001234, xfs_icache.c:1234
+[   80.000010] XFS (nvme0n1p2): Unmount and run xfs_repair
+[   80.000020] XFS (nvme0n1p2): First 64 bytes of corrupted metadata buffer:

@@ -26,7 +26,9 @@ SIGNATURES: list[tuple[str, re.Pattern]] = [
         ("fault", r"general protection fault|\bKASAN\b|\bKCSAN\b|null pointer dereference|page fault"),
         ("lockup", r"soft lockup|hard LOCKUP|hard lockup|watchdog.*BUG"),
         ("hung-task", r"blocked for more than|hung_task|\btainted\b"),
-        ("oom", r"Out of memory|oom-kill|Killed process|oom_reaper|Memory cgroup out of memory"),
+        # require the actual kernel OOM-killer wording: bare "Out of memory"
+        # also appears in driver errors (e.g. NVRM's NV_ERR_NO_MEMORY)
+        ("oom", r"Out of memory: Killed process|oom-kill|oom_reaper|Memory cgroup out of memory"),
         ("segfault", r"segfault|\btraps:|\bDo \w+ fault\b"),
         ("fs-error", r"EXT4-fs error|EXT4-fs warning|XFS \(.*\): .*(error|corruption)|BTRFS.*error"),
         ("io-error", r"I/O error|blk_update_request|critical target|medium error|critical write"),
@@ -37,7 +39,7 @@ SIGNATURES: list[tuple[str, re.Pattern]] = [
         ("pcie-aer", r"\bAER\b|PCIe Bus Error|pcieport.*error"),
         ("thermal", r"thermal|temperature above|throttl|over-heat|overheat"),
         ("gpu-amd", r"amdgpu.*(reset|hang|ih error|halt|timeout)|ring .*timeout|\[drm\].*timeout"),
-        ("gpu-nvidia", r"\bXid\b|nvidia.*(error|fault|bug)"),
+        ("gpu-nvidia", r"\bXid\b|\bNVRM\b|nvidia.*(error|fault|bug)"),
         ("gpu-nouveau", r"nouveau.*(error|fault|gr \d)"),
         ("usb", r"usb .*(disconnect|reset|error)|xhci.*(died|error|timeout)|hub .*(disconnect|error)"),
         ("net-link", r"link is (down|up)|NIC Link is (Down|Up)"),

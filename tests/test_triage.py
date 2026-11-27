@@ -17,6 +17,14 @@ def test_signatures_hit():
         assert expected in names, f"missing signature {expected}, got: {names}"
 
 
+def test_nvrm_out_of_memory_is_gpu_not_oom():
+    lines = ["[ 1.0] NVRM: nvCheckOkFailedNoLog: Check failed: Out of memory "
+             "[NV_ERR_NO_MEMORY] (0x51) returned from _memdescAllocInternal"]
+    names = {n for b in find_blocks(lines) for n in b.names}
+    assert "gpu-nvidia" in names
+    assert "oom" not in names
+
+
 def test_block_line_numbers_are_real():
     lines = _lines()
     blocks = find_blocks(lines)

@@ -1,0 +1,4 @@
+[  120.000000] dpkg: error processing package libfoo:amd64 (--configure):
+[  120.000010]  installed libfoo:amd64 package post-installation script subprocess returned error exit status 1
+[  120.000020] Errors were encountered while processing:
+[  120.000030]  libfoo:amd64

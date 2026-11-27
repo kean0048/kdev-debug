@@ -1,0 +1,3 @@
+[   60.000000] watchdog: BUG: hard LOCKUP
+[   60.000010] Kernel panic - not syncing: Hard LOCKUP
+[   60.000020] CPU: 3 PID: 0 Comm: swapper/3 Tainted: G        W

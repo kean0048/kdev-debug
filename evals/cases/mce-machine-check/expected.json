@@ -1,0 +1,10 @@
+{
+  "id": "mce-machine-check",
+  "description": "Machine-check exception logged by the CPU",
+  "expect": {
+    "subsystem": ["hardware"],
+    "severity": ["high", "critical"],
+    "any_keywords": ["machine check", "mce", "hardware"],
+    "must_not_dismiss": []
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "id": "edac-ue",
+  "description": "Uncorrected ECC memory errors reported by EDAC",
+  "expect": {
+    "subsystem": ["hardware"],
+    "severity": ["high"],
+    "any_keywords": ["edac", "ecc", "uncorrected"],
+    "must_not_dismiss": []
+  }
+}

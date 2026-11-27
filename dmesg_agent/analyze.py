@@ -82,12 +82,14 @@ def validate_analysis(result: dict, corpus_lines: list[str]) -> list[str]:
 
 def run_analysis(client, bundle: RawBundle, blocks_text: str, prefetch_text: str,
                  log_lines: list[str], source_text: str = "", retries: int = 1,
-                 scan_text: str = "", make_stream=None) -> tuple[dict | None, str]:
+                 scan_text: str = "", make_stream=None,
+                 history_text: str = "", facts_text: str = "") -> tuple[dict | None, str]:
     """First-pass analysis; on validation failure, feed the exact error list back
     for one retry (sashiko feedback-retry). log_lines doubles as the evidence
     corpus: pass log lines plus any collected scan/prefetch output lines so
     evidence quoted from collections is valid."""
-    msgs = build_messages(bundle, blocks_text, prefetch_text, source_text, scan_text)
+    msgs = build_messages(bundle, blocks_text, prefetch_text, source_text, scan_text,
+                          history_text=history_text, facts_text=facts_text)
     result, answer = None, ""
     for attempt in range(retries + 1):
         cb = make_stream(f"analysis attempt {attempt + 1}") if make_stream else None
@@ -109,40 +111,73 @@ def _concern_text(c: dict) -> str:
 
 def deep_dive(client, executor, result: dict, log_lines: list[str],
               bundle: RawBundle, max_concerns: int = 5,
-              extra_corpus: list[str] | None = None, make_stream=None) -> tuple[dict, list[str]]:
+              extra_corpus: list[str] | None = None, make_stream=None,
+              max_rounds: int = 2) -> tuple[dict, list[str]]:
     """Returns (result, corpus). Per inconclusive concern: playbook collection
-    (with sudo prompts) → verdict → merged back into result.
+    (with sudo prompts) → verdict → if still inconclusive, a follow-up round
+    routed by the model's stated gap → merged back into result.
 
     corpus = original log + all collected output, used for final evidence verification.
     All collection commands come from the whitelist playbooks; the model's
-    verification_question is only used to pick subsystems — commands proposed by
-    the model are never executed directly (log-injection defense).
+    verification_question/reason is only used to pick subsystems — commands
+    proposed by the model are never executed directly (log-injection defense).
     """
     concerns = [c for c in (result.get("inconclusive_concerns") or []) if isinstance(c, dict)]
     corpus = list(log_lines) + (extra_corpus or [])
-    outcome = {"confirmed": 0, "dismissed": 0, "inconclusive": 0, "skipped": 0}
+    outcome = {"confirmed": 0, "dismissed": 0, "inconclusive": 0, "skipped": 0, "rounds": 0}
+    max_rounds = max(1, max_rounds)
 
     for c in concerns[:max_concerns]:
-        evidences = run_deep(executor, _concern_text(c))
-        for ev in evidences:
-            corpus.extend(ev.output.splitlines())
-        msgs = build_verdict_messages(c, evidences, bundle)
-        verdict, answer = None, ""
-        for attempt in range(2):
-            cb = make_stream(f"verdict: {c.get('title', '')[:40]}") if make_stream else None
-            answer = client.chat(msgs, stream_cb=cb)
-            verdict = parse_json_response(answer)
-            errors = validate_verdict(verdict, corpus)
-            if not errors:
+        seen_cmds: set[str] = set()
+        collected_all: list = []
+        rounds_log: list[dict] = []
+        verdict = None
+        used_rounds = 0
+        for rnd in range(1, max_rounds + 1):
+            text = _concern_text(c)
+            if verdict is not None:
+                # the previous verdict said what is missing; route the next
+                # round by that stated gap (still only picks whitelisted subs)
+                text += " " + str(verdict.get("reason", ""))
+            evidences = run_deep(executor, text, exclude=seen_cmds)
+            if rnd > 1 and not evidences:
                 break
-            if attempt == 0:
-                msgs += feedback_message(errors, answer)
+            used_rounds = rnd
+            seen_cmds |= {e.cmd for e in evidences}
+            collected_all.extend(evidences)
+            for ev in evidences:
+                corpus.extend(ev.output.splitlines())
+            msgs = build_verdict_messages(c, collected_all, bundle)
+            verdict, answer = None, ""
+            for attempt in range(2):
+                cb = make_stream(f"verdict: {c.get('title', '')[:40]}"
+                                 + (f" (round {rnd})" if rnd > 1 else "")) if make_stream else None
+                answer = client.chat(msgs, stream_cb=cb)
+                verdict = parse_json_response(answer)
+                errors = validate_verdict(verdict, corpus)
+                if not errors:
+                    break
+                if attempt == 0:
+                    msgs += feedback_message(errors, answer)
+            rounds_log.append({
+                "round": rnd,
+                "commands": [e.cmd for e in evidences],
+                "verdict": (verdict or {}).get("verdict", "failed"),
+            })
+            if verdict is not None and verdict.get("verdict") in ("confirmed", "dismissed"):
+                break
+            if verdict is None or verdict.get("verdict") != "inconclusive":
+                break
+        outcome["rounds"] += max(used_rounds, 1)
         if verdict is None or verdict.get("verdict") not in ("confirmed", "dismissed", "inconclusive"):
             outcome["skipped"] += 1
-            c["deep_dive"] = {"status": "failed", "collected": [e.as_dict() for e in evidences]}
+            c["deep_dive"] = {"status": "failed", "rounds": rounds_log,
+                              "collected": [e.as_dict() for e in collected_all]}
             continue
 
-        verdict["collected"] = [e.as_dict() for e in evidences]
+        verdict["collected"] = [e.as_dict() for e in collected_all]
+        if rounds_log:
+            verdict["rounds"] = rounds_log
         c["deep_dive"] = verdict
         v = verdict["verdict"]
         outcome[v] += 1

@@ -13,6 +13,7 @@ sudo and trigger a password prompt).
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from .executors import Executor
@@ -20,6 +21,7 @@ from .executors import Executor
 PREFETCH_CHAR_BUDGET = 20_000   # total cap for prefetched context (characters)
 DEEP_MAX_CMDS_PER_CONCERN = 6   # max collection commands per open question
 DEEP_MAX_CHARS_PER_CMD = 3_000  # per-command output truncation
+COLLECT_PARALLELISM = 4         # concurrent local collection commands
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,7 @@ class CollectCmd:
     cmd: str
     why: str
     sudo: bool = False
+    timeout: int = 30  # per-command timeout; slow devices get a shorter leash
 
 
 # triage signature → subsystem (deterministic routing; the model doesn't choose)
@@ -142,7 +145,7 @@ DEEP_BY_SUBSYSTEM: dict[str, list[CollectCmd]] = {
         CollectCmd("ps -eo pid,user,rss,vmess,stat,comm --sort=-rss | head -20", "per-process memory detail"),
     ],
     "storage": [
-        CollectCmd("for d in $(lsblk -dn -o NAME 2>/dev/null | head -6); do echo \"== /dev/$d\"; smartctl -H -A /dev/$d 2>&1 | grep -iE 'overall health|Reallocated|Pending Sector|Uncorrect|Wear Leveling|Percentage Used|Temperature|Power On Hours'; done", "SMART health and key attributes for all disks", sudo=True),
+        CollectCmd("for d in $(lsblk -dn -o NAME 2>/dev/null | head -6); do echo \"== /dev/$d\"; smartctl -H -A /dev/$d 2>&1 | grep -iE 'overall health|Reallocated|Pending Sector|Uncorrect|Wear Leveling|Percentage Used|Temperature|Power On Hours'; done", "SMART health and key attributes for all disks", sudo=True, timeout=10),
         CollectCmd("journalctl -k --no-pager | grep -iE 'blk_update_request|I/O error|nvme[0-9]|ata[0-9]+\\.[0-9]|EXT4-fs error|XFS.*error' | tail -80", "all historical I/O errors for this disk", sudo=True),
     ],
     "gpu": [
@@ -244,35 +247,48 @@ def run_prefetch(executor: Executor, signature_names: set[str]) -> list[Collecte
     return _run(executor, cmds, PREFETCH_CHAR_BUDGET, skip_sudo=True)
 
 
-def run_deep(executor: Executor, concern_text: str) -> list[CollectedEvidence]:
+def run_deep(executor: Executor, concern_text: str,
+             exclude: set[str] | None = None) -> list[CollectedEvidence]:
     """Deep collection: route the concern text to subsystems, run the matching
-    playbooks (sudo allowed), capped in count."""
+    playbooks (sudo allowed), capped in count. ``exclude`` skips commands that
+    an earlier round already ran, so a follow-up round collects new data."""
     subs = subsystems_from_text(concern_text)
     cmds: list[CollectCmd] = []
     seen: set[str] = set()
     for sub in sorted(subs):
         for c in DEEP_BY_SUBSYSTEM.get(sub, []):
-            if c.cmd not in seen:
+            if c.cmd not in seen and not (exclude and c.cmd in exclude):
                 seen.add(c.cmd)
                 cmds.append(c)
     return _run(executor, cmds[:DEEP_MAX_CMDS_PER_CONCERN],
                 DEEP_MAX_CMDS_PER_CONCERN * DEEP_MAX_CHARS_PER_CMD, skip_sudo=False)
 
 
+def _run_one(executor: Executor, c: CollectCmd) -> CollectedEvidence:
+    try:
+        res = executor.run(c.cmd, sudo=c.sudo, timeout=c.timeout)
+    except Exception as e:  # one broken collector must not abort the others
+        return CollectedEvidence(c.cmd, c.why, f"(collector error: {e})", "empty")
+    if res.skip_reason:
+        return CollectedEvidence(c.cmd, c.why, f"(skipped: {res.skip_reason})", "skipped")
+    if not res.usable:
+        return CollectedEvidence(c.cmd, c.why, "(no output or unusable)", "empty")
+    return CollectedEvidence(c.cmd, c.why, _truncate(res.out, DEEP_MAX_CHARS_PER_CMD), "ok")
+
+
 def _run(executor: Executor, cmds: list[CollectCmd], budget: int, skip_sudo: bool) -> list[CollectedEvidence]:
+    runnable = [c for c in cmds if not (skip_sudo and c.sudo)]
+    if getattr(executor, "parallel_safe", False) and len(runnable) > 1:
+        with ThreadPoolExecutor(max_workers=min(COLLECT_PARALLELISM, len(runnable))) as pool:
+            # submit in declaration order and consume in the same order, so the
+            # collected evidence (and the prompt) stays deterministic
+            outcomes = list(pool.map(lambda c: _run_one(executor, c), runnable))
+    else:
+        outcomes = [_run_one(executor, c) for c in runnable]
+
     results: list[CollectedEvidence] = []
     used = 0
-    for c in cmds:
-        if skip_sudo and c.sudo:
-            continue
-        res = executor.run(c.cmd, sudo=c.sudo)
-        if res.skip_reason:
-            ev = CollectedEvidence(c.cmd, c.why, f"(skipped: {res.skip_reason})", "skipped")
-        elif not res.usable:
-            ev = CollectedEvidence(c.cmd, c.why, "(no output or unusable)", "empty")
-        else:
-            out = _truncate(res.out, DEEP_MAX_CHARS_PER_CMD)
-            ev = CollectedEvidence(c.cmd, c.why, out, "ok")
+    for ev in outcomes:
         used += len(ev.output)
         results.append(ev)
         if used >= budget:

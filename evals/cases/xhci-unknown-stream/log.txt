@@ -1,0 +1,4 @@
+Nov 21 20:04:23 thinkstationpgx kernel: xhci-hcd NVDA8000:00: Transfer event 26 for unknown stream ring slot 4 ep 4
+Nov 21 20:04:47 thinkstationpgx kernel: xhci-hcd NVDA8000:00: Transfer event 26 for unknown stream ring slot 4 ep 4
+Nov 21 20:10:05 thinkstationpgx kernel: xhci-hcd NVDA8000:00: Transfer event 26 for unknown stream ring slot 4 ep 4
+Nov 21 20:10:18 thinkstationpgx kernel: xhci-hcd NVDA8000:00: Transfer event 26 for unknown stream ring slot 4 ep 4

@@ -1,0 +1,10 @@
+{
+  "id": "hung-task",
+  "description": "Kernel worker stuck in uninterruptible sleep beyond the hung-task threshold",
+  "expect": {
+    "subsystem": ["locking"],
+    "severity": ["high"],
+    "any_keywords": ["hung", "blocked for more than", "task"],
+    "must_not_dismiss": []
+  }
+}

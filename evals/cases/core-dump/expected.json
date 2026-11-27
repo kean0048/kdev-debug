@@ -1,0 +1,10 @@
+{
+  "id": "core-dump",
+  "description": "Userspace application crash with a core dump",
+  "expect": {
+    "subsystem": ["userspace"],
+    "severity": ["medium", "high"],
+    "any_keywords": ["core dump", "segfault", "application"],
+    "must_not_dismiss": []
+  }
+}

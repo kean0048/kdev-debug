@@ -96,6 +96,33 @@ def test_render_includes_case_diff():
     assert "1 new" in report and "1 ongoing" in report
 
 
+def test_render_includes_deterministic_facts():
+    r = _result(_finding("oom", "high"))
+    r["facts"] = [{"kind": "oom", "key": "chrome",
+                   "value": "killed 2 time(s)", "line": 10}]
+    report = render(r, RawBundle(dmesg_text=""), VerifySummary(),
+                    [Block(1, 1, ["oom"])])
+    assert "Appendix: deterministic facts" in report
+    assert "chrome" in report and "killed 2" in report
+    html = render_html(r, RawBundle(dmesg_text=""), VerifySummary(),
+                       [Block(1, 1, ["oom"])], ["[1.0] x"])
+    assert "deterministic facts" in html and "killed 2" in html
+
+
+def test_verdict_shows_fast_path_chip():
+    r = _result(_finding("oom", "high"))
+    r["knowledge"] = {"fast_path": {"case_id": 3, "score": 0.9}}
+    v = build_verdict(r, VerifySummary())
+    assert any("fast path" in c and "#3" in c for c in v["chips"])
+
+
+def test_verdict_shows_all_fast_path_cases():
+    r = _result(_finding("oom", "high"))
+    r["knowledge"] = {"fast_path_cases": [{"case_id": 1}, {"case_id": 2}]}
+    v = build_verdict(r, VerifySummary())
+    assert any("fast path" in c and "#1, #2" in c for c in v["chips"])
+
+
 def test_html_report_escapes_and_shows_verdict():
     r = _result(_finding("<script>alert(1)</script>", "critical"))
     html = render_html(r, RawBundle(dmesg_text="", kernel_version="6.12", source="test"),

@@ -39,6 +39,38 @@ class SrcInfo:
     body: str = ""
     history: list[str] = field(default_factory=list)
     candidates: list[str] = field(default_factory=list)  # other definitions of the same name
+    fixes: list[dict] = field(default_factory=list)  # fix commits touching this file
+
+
+_KVER_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
+_RC_RE = re.compile(r"-rc(\d+)")
+
+
+def parse_kernel_version(text: str) -> tuple[int, int, int, int | None] | None:
+    m = _KVER_RE.search(text or "")
+    if not m:
+        return None
+    rc_m = _RC_RE.search(text)
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0),
+            int(rc_m.group(1)) if rc_m else None)
+
+
+def kernel_includes_tag(running: str, tag: str) -> bool | None:
+    """Is upstream release `tag` <= the running kernel version? (heuristic)
+
+    Distro kernels backport fixes, so False means "not in the upstream release
+    line the running version is based on" — the report tells the user to check
+    the distro changelog rather than treating it as proof.
+    """
+    rv, tv = parse_kernel_version(running), parse_kernel_version(tag)
+    if rv is None or tv is None:
+        return None
+
+    def key(v: tuple[int, int, int, int | None]) -> tuple[int, int, int, int]:
+        major, minor, patch, rc = v
+        return (major, minor, patch, 0 if rc is None else -rc)
+
+    return key(rv) >= key(tv)
 
 
 def extract_symbols(log_lines: list[str], cap: int = 12) -> list[tuple[str, str]]:
@@ -78,6 +110,7 @@ class SrcMap:
         self.tree = Path(tree) if tree else None
         self._index: dict[str, list[tuple[str, int]]] | None = None
         self._cache_dir = cache_dir or CACHE_ROOT
+        self._fix_cache: dict[str, list[dict]] = {}
 
     @property
     def available(self) -> bool:
@@ -164,7 +197,30 @@ class SrcMap:
         info.body = self._extract_body(file, line)
         hist = _git(str(self.tree), "log", "--oneline", "-5", "--", file, timeout=60)
         info.history = [h for h in hist.splitlines() if h][:5]
+        info.fixes = self._fix_candidates(file)
         return info
+
+    def _fix_candidates(self, rel_path: str, cap: int = 3) -> list[dict]:
+        """Commits touching this file whose subject mentions a fix, with the
+        first release tag that contains them (git describe --contains)."""
+        if rel_path in self._fix_cache:
+            return self._fix_cache[rel_path]
+        out = _git(str(self.tree), "log", "--format=%h%x09%s", "-40", "--", rel_path,
+                   timeout=60)
+        fixes: list[dict] = []
+        for raw in out.splitlines():
+            sha, _, subject = raw.partition("\t")
+            if not sha or not re.search(r"\b(fix|fixes|fixed|fixing|regression)\b",
+                                        subject, re.I):
+                continue
+            tag = _git(str(self.tree), "describe", "--contains", sha, "--tags",
+                       "--abbrev=0", timeout=30).strip()
+            fixes.append({"commit": sha, "subject": subject.strip()[:160],
+                          "first_tag": tag})
+            if len(fixes) >= cap:
+                break
+        self._fix_cache[rel_path] = fixes
+        return fixes
 
     def _extract_body(self, rel_path: str, start_line: int, cap: int = 120) -> str:
         try:
@@ -188,7 +244,8 @@ class SrcMap:
         return "\n".join(out)
 
     def render(self, symbols: list[tuple[str, str]], max_funcs: int = 5,
-               body_funcs: int = 3, budget: int = 18_000) -> tuple[str, list[SrcInfo]]:
+               body_funcs: int = 3, budget: int = 18_000,
+               running_kernel: str = "") -> tuple[str, list[SrcInfo]]:
         """Render the source_context text; returns (text, list of successfully correlated SrcInfo)."""
         text_parts: list[str] = [
             f"[Kernel source correlation] source tree {self.tree} (version {self.version}); the function bodies below are verbatim from the tree:",
@@ -206,11 +263,34 @@ class SrcMap:
                 continue
             body = f"```\n{info.body}\n```" if len(infos) < body_funcs else "(body omitted; see the source location)"
             hist = "\n".join(f"  - {h}" for h in info.history) or "  - (no records)"
+            fix_lines = ""
+            if info.fixes:
+                parts = ["Fix candidates (commits touching this file whose subject mentions a fix; "
+                         "confirm the commit is the actual root-cause fix before backporting):"]
+                for fx in info.fixes:
+                    tag = fx.get("first_tag") or ""
+                    if tag:
+                        inc = kernel_includes_tag(running_kernel, tag) if running_kernel else None
+                        if inc is True:
+                            status = (f"first released in {tag}; the running kernel "
+                                      f"{running_kernel or '?'} is at or after it upstream "
+                                      f"(distro backports may still differ)")
+                        elif inc is False:
+                            status = (f"first released in {tag}; NOT in the running kernel "
+                                      f"{running_kernel} upstream — candidate for upgrade/backport "
+                                      f"(check the distro changelog for backports)")
+                        else:
+                            status = f"first released in {tag} (running kernel version unknown)"
+                    else:
+                        status = "no release tag contains this commit yet"
+                    parts.append(f"  - {fx['commit']} {fx['subject']} — {status}")
+                fix_lines = "\n".join(parts)
             chunk = (f"### {func}"
                      + (f" (module {module})" if module else "")
                      + f"\nLocation: {info.file}:{info.line}"
                      + (f"\nOther same-name definitions: {', '.join(info.candidates)}" if info.candidates else "")
                      + f"\n{body}\nRecent commits touching this file:\n{hist}"
+                     + (f"\n{fix_lines}" if fix_lines else "")
                      + ("\n(truncated)" if len(body) > 4000 else ""))
             if used + len(chunk) > budget:
                 break

@@ -10,6 +10,8 @@ from pathlib import Path
 
 from . import __version__
 from .analyze import deep_dive, run_analysis
+from .archive import (RecordingClient, build_archive, new_run_uuid,
+                      write_run_archive)
 from .collectors.base import RawBundle, collect_via
 from .collectors.filelog import collect_file
 from .config import (
@@ -19,17 +21,21 @@ from .config import (
     read_file_config,
     set_file_config,
     unset_file_config,
+    use_provider,
 )
 from .errors import CollectError
 from .executors import Executor, LocalExecutor, SSHExecutor
-from .knowledge import DEFAULT_FUZZY, KnowledgeError, cases_main, record_run, resolve_db_path
-from .llm import Client, LLMError
+from .facts import extract_facts, render_facts
+from .knowledge import (DEFAULT_FUZZY, KnowledgeError, cases_main, find_confirmed_cases,
+                        host_history, log_fingerprint, record_run, resolve_db_path)
+from .llm import Client, LLMError, pick_model
 from .passwds import PassResolver
+from .providers import get_provider, provider_choices, provider_table
 from .srcmap import SrcMap, extract_symbols
 from .systemscan import (run_cross_boot, run_live_probe, run_system_changes,
                          run_system_scan)
 from .playbooks import run_prefetch
-from .prompts import render_prefetch, render_scan
+from .prompts import render_history, render_prefetch, render_scan
 from .report import apply_ansi, render, render_brief
 from .report_html import render_html
 from .scorecard import format_for_check, latest_score, score_main
@@ -61,6 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-prefetch", action="store_true", help="skip the initial prefetch collection")
     p.add_argument("--no-deep", action="store_true", help="skip deep verification of open questions")
     p.add_argument("--max-verify", type=int, default=5, help="max open questions to deep-verify (default 5)")
+    p.add_argument("--deep-rounds", type=int, default=2, metavar="N",
+                   help="max deep-collection rounds per open question (default 2)")
     p.add_argument("--askpass", choices=["auto", "terminal", "gui", "none"], default="auto",
                    help="how to obtain the sudo password (default auto: terminal first, GUI dialog fallback)")
     p.add_argument("-o", "--output", help="write the report to a file (default: stdout)")
@@ -97,15 +105,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--kmatch-threshold", type=float, default=DEFAULT_FUZZY, metavar="F",
                    help=f"similarity threshold for similar-case recall (default {DEFAULT_FUZZY})")
     p.add_argument("--max-tokens", type=int, help="model output ceiling (default 32768)")
+    p.add_argument("--provider", choices=provider_choices(),
+                   help="LLM provider preset: local/vllm/ollama, deepseek, openai/gpt, "
+                        "anthropic/claude, gemini, openrouter, custom")
     p.add_argument("--model", help="model name (default: auto-discover)")
-    p.add_argument("--base-url", help="OpenAI-compatible API base URL")
-    p.add_argument("--api-key", help="API key (or set the OPENAI_API_KEY env var)")
+    p.add_argument("--base-url", help="endpoint base URL (overrides the provider preset)")
+    p.add_argument("--api-key", help="API key (or use the provider's env var)")
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return p
 
 
 _INT_KEYS = {"max_tokens", "timeout"}
+_FLOAT_KEYS = {"temperature"}
 
 
 def _build_config_parser() -> argparse.ArgumentParser:
@@ -116,6 +128,14 @@ def _build_config_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="action", required=True)
     sub.add_parser("show", help="show saved settings and the effective values")
+    sub.add_parser("providers", help="list the built-in provider presets")
+    use = sub.add_parser("use", help="quick-setup a provider preset (writes provider, "
+                                     "base_url, model and API style)")
+    use.add_argument("provider", choices=provider_choices())
+    use.add_argument("--base-url", help="override the preset's base URL (required for local)")
+    use.add_argument("--model", help="override the preset's default model")
+    use.add_argument("--api-key", help="store an API key in the config file (0600); "
+                                       "environment variables are recommended")
     sp = sub.add_parser("set", help=f"write a setting ({', '.join(FILE_KEYS)})")
     sp.add_argument("key", choices=list(FILE_KEYS))
     sp.add_argument("value")
@@ -129,6 +149,40 @@ def _config_main(argv: list[str]) -> int:
     args = _build_config_parser().parse_args(argv)
     if args.action == "check":
         return _check_main()
+    if args.action == "providers":
+        rows = provider_table()
+        print(f"{'PROVIDER':<12} {'BASE URL':<52} {'DEFAULT MODEL':<22} KEY ENV")
+        for r in rows:
+            print(f"{r['name']:<12} {r['base_url']:<52} {r['default_model']:<22} {r['key_envs']}")
+            if r["note"]:
+                print(f"{'':<12} {r['note']}")
+        print("\nquick setup: dmesg-agent config use <provider> [--base-url URL] "
+              "[--model NAME]\nthen verify:  dmesg-agent check")
+        return 0
+    if args.action == "use":
+        preset = get_provider(args.provider)
+        old = read_file_config().get("provider")
+        try:
+            data = use_provider(args.provider, base_url=args.base_url,
+                                model=args.model, api_key=args.api_key)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        print(f"provider: {preset.name} — {preset.label}")
+        print(f"base_url: {data.get('base_url') or preset.base_url or '(not set)'}")
+        print(f"model:    {data.get('model') or '(auto-discover)'}")
+        print(f"style:    {preset.api_style}  chat_path={preset.chat_path}  "
+              f"models_path={preset.models_path}")
+        if old and old != preset.name and data.get("api_key") and not args.api_key:
+            print("warning: an existing api_key was kept; it may belong to the previous "
+                  "provider — unset it with `dmesg-agent config unset api_key`",
+                  file=sys.stderr)
+        if preset.key_envs and not args.api_key:
+            print(f"api key:  set {preset.key_envs[0]} in the environment "
+                  f"(recommended) or re-run with --api-key")
+        print(f"config file: {config_path()}")
+        print("next: dmesg-agent check")
+        return 0
     if args.action == "show":
         cfg = load_config()
         saved = read_file_config()
@@ -141,18 +195,42 @@ def _config_main(argv: list[str]) -> int:
         for k in FILE_KEYS:
             print(f"  {k}: {masked.get(k, '(not set)')}")
         print("effective values:")
-        print(f"  base_url: {cfg.base_url}")
+        print(f"  provider: {cfg.provider} ({cfg.provider_label})")
+        print(f"  base_url: {cfg.base_url or '(not set)'} ({cfg.base_url_source})")
         print(f"  model: {cfg.model or '(auto-discover)'}")
-        print(f"  api_key: {'(set)' if cfg.api_key else '(not set)'}")
-        print(f"  max_tokens: {cfg.max_tokens}  timeout: {cfg.timeout}s")
+        print(f"  api_key: {'(set via ' + cfg.key_source + ')' if cfg.api_key else '(not set)'}")
+        print(f"  api_style: {cfg.api_style}  chat_path={cfg.chat_path}  "
+              f"models_path={cfg.models_path}")
+        print(f"  max_tokens: {cfg.max_tokens}  timeout: {cfg.timeout}s  "
+              f"temperature: {cfg.temperature}")
         return 0
     if args.action == "set":
         value: object = args.value
-        if args.key in _INT_KEYS:
+        if args.key == "provider":
             try:
-                value = int(args.value)
+                data = use_provider(str(value))
+            except ValueError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 2
+            print(f"provider = {data.get('provider')} → {config_path()}")
+            print("next: dmesg-agent check")
+            return 0
+        if args.key in _INT_KEYS or args.key in _FLOAT_KEYS:
+            try:
+                value = (int(args.value) if args.key in _INT_KEYS
+                         else float(args.value))
             except ValueError:
-                print(f"error: {args.key} requires an integer, got {args.value!r}", file=sys.stderr)
+                print(f"error: {args.key} requires a number, got {args.value!r}",
+                      file=sys.stderr)
+                return 2
+        elif args.key == "extra_body":
+            try:
+                value = json.loads(args.value)
+            except json.JSONDecodeError as e:
+                print(f"error: extra_body must be a JSON object: {e}", file=sys.stderr)
+                return 2
+            if not isinstance(value, dict):
+                print("error: extra_body must be a JSON object", file=sys.stderr)
                 return 2
         set_file_config(args.key, value)
         shown = "****" if args.key == "api_key" else value
@@ -163,34 +241,49 @@ def _config_main(argv: list[str]) -> int:
     return 0
 
 
-def _check_main(client: Client | None = None) -> int:
+def _check_main(argv: list[str] | None = None, client: Client | None = None) -> int:
     """`dmesg-agent check`: pre-flight readiness probe — print every config item
     with its source, reach-test the endpoint, and list what still needs setting.
-    Exit 0 = ready, 1 = not ready."""
+    Exit 0 = ready, 1 = not ready.
+
+    ``argv is None`` checks the saved config (used by `config check`); otherwise
+    `check --provider/--base-url/--model/--api-key` applies one-off overrides."""
+    opts = None
+    if argv is not None:
+        cp = argparse.ArgumentParser(
+            prog="dmesg-agent check",
+            description="pre-flight LLM readiness probe (optionally with one-off overrides)")
+        cp.add_argument("--provider", choices=provider_choices())
+        cp.add_argument("--base-url")
+        cp.add_argument("--model")
+        cp.add_argument("--api-key")
+        opts = cp.parse_args(argv)
+    cfg = load_config(
+        provider=getattr(opts, "provider", None),
+        base_url=getattr(opts, "base_url", None),
+        model=getattr(opts, "model", None),
+        api_key=getattr(opts, "api_key", None),
+    )
     fc = read_file_config()
-    cfg = load_config()
     problems: list[str] = []
 
     print("dmesg-agent pre-flight check")
     print(f"config file: {config_path()}")
 
-    if os.environ.get("OPENAI_BASE_URL"):
-        url_src = "OPENAI_BASE_URL env var"
-    elif fc.get("base_url"):
-        url_src = "config file"
+    print(f"[ok]         provider: {cfg.provider} ({cfg.provider_label}); "
+          f"style={cfg.api_style}")
+    if cfg.base_url_source not in ("built-in default", "not set") and cfg.base_url:
+        print(f"[ok]         base_url: {cfg.base_url} ({cfg.base_url_source})")
     else:
-        url_src = ""
-    if url_src:
-        print(f"[ok]         base_url: {cfg.base_url} ({url_src})")
-    else:
-        print(f"[needs set]  base_url: {cfg.base_url} (built-in default — not explicitly configured)")
-        problems.append("base_url not configured — set it: dmesg-agent config set base_url <url>")
+        print(f"[needs set]  base_url: {cfg.base_url or '(empty)'} ({cfg.base_url_source})")
+        problems.append("base_url not configured — run `dmesg-agent config use <provider>` "
+                        "or set base_url")
 
     client = client or Client(cfg)
     models: list[str] = []
     try:
         models = client.list_models()
-        print(f"[ok]         endpoint: /v1/models reachable — {len(models)} model(s)")
+        print(f"[ok]         endpoint: {cfg.models_path} reachable — {len(models)} model(s)")
         if models:
             shown = ", ".join(models[:5]) + (" …" if len(models) > 5 else "")
             print(f"             models: {shown}")
@@ -204,12 +297,19 @@ def _check_main(client: Client | None = None) -> int:
         else:
             print(f"[ok]         model: {cfg.model}")
     elif models:
-        print(f"[ok]         model: (auto-discover) → '{models[0]}'")
+        picked = pick_model(models)
+        print(f"[ok]         model: (auto-discover) → '{picked}'")
     else:
         print("[warn]       model: (auto-discover) — cannot confirm until the endpoint is reachable")
 
+    preset = get_provider(cfg.provider)
     if cfg.api_key:
-        print("[ok]         api_key: set")
+        print(f"[ok]         api_key: set ({cfg.key_source})")
+    elif preset.requires_key:
+        env_hint = preset.key_envs[0] if preset.key_envs else "the provider's API key env var"
+        print(f"[needs set]  api_key: not set for provider {preset.name!r}")
+        problems.append(f"set the API key for {preset.name}: export {env_hint}=... "
+                        f"or `dmesg-agent config use {preset.name} --api-key <key>`")
     else:
         print("[info]       api_key: not set (fine for unauthenticated local endpoints; "
               "otherwise: dmesg-agent config set api_key <key>)")
@@ -280,6 +380,31 @@ def _make_stream_factory():
     return make
 
 
+def _resolve_host(args, bundle: RawBundle) -> str:
+    """Stable case-library identity for this run.
+
+    Priority: explicit --host-id > /etc/machine-id (live/SSH) > hostname parsed
+    from journalctl lines (--file) > SSH target > file name (last resort, warned
+    about because different machines exporting the same file name would collide).
+    """
+    if args.host_id:
+        return str(args.host_id).strip()[:128]
+    ctx = bundle.extra_context or {}
+    for key in ("machine_id", "hostname"):
+        value = ctx.get(key)
+        if value:
+            return str(value).strip()[:128]
+    if args.ssh:
+        return str(args.ssh).strip()[:128]
+    if args.file:
+        name = Path(args.file).name
+        print(f"warning: no stable host identity found in {args.file}; using the file "
+              f"name {name!r} for the case library — pass --host-id to keep cases "
+              f"from different machines apart", file=sys.stderr)
+        return name.strip()[:128]
+    return str(bundle.source).strip()[:128]
+
+
 def _make_executor(args, resolver: PassResolver) -> Executor | None:
     if args.file:
         return None
@@ -324,7 +449,7 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] == "config":
         return _config_main(argv[1:])
     if argv and argv[0] == "check":
-        return _check_main()
+        return _check_main(argv[1:])
     if argv and argv[0] == "eval":
         return _eval_main(argv[1:])
     if argv and argv[0] == "cases":
@@ -429,57 +554,134 @@ def main(argv: list[str] | None = None) -> int:
                 log("[3.5]", f"source correlation: {len(syms)} trace functions @ {src_path}")
                 try:
                     sm.build_index(progress=lambda m: print(f"  {m}", file=sys.stderr))
-                    source_text, matched = sm.render(syms)
+                    source_text, matched = sm.render(
+                        syms, running_kernel=bundle.kernel_version)
                     log("[3.5]", f"correlated {len(matched)}/{len(syms)} functions")
                 except Exception as e:
                     print(f"warning: source correlation failed ({e}); continuing without sources",
                           file=sys.stderr)
 
-    cfg = load_config(base_url=args.base_url, model=args.model, api_key=args.api_key)
+    facts = extract_facts(lines, [prefetch_text, scan_text])
+    facts_text = render_facts(facts)
+    if facts:
+        log("[4/5]", f"deterministic facts: {len(facts)}")
+
+    cfg = load_config(base_url=args.base_url, model=args.model, api_key=args.api_key,
+                      provider=args.provider)
     if args.max_tokens:
         cfg.max_tokens = args.max_tokens
-    client = Client(cfg)
+    host = _resolve_host(args, bundle)
+    history_text = ""
+    known_cases: list[dict] = []
+    known_case = None
+    if not args.no_knowledge:
+        try:
+            history_text = render_history(
+                host_history(resolve_db_path(args.knowledge_db), host))
+        except KnowledgeError as e:
+            print(f"warning: case history unavailable ({e})", file=sys.stderr)
+        if history_text:
+            log("[4/5]", f"prior case history: {history_text.count(chr(10)) + 1} line(s)")
+        try:
+            block_lines: list[str] = []
+            for b in blocks:
+                block_lines.extend(lines[b.start - 1:b.end])
+            tokens = log_fingerprint(block_lines).tokens
+            known_cases = find_confirmed_cases(
+                resolve_db_path(args.knowledge_db), host, tokens, log_lines=lines)
+        except KnowledgeError as e:
+            print(f"warning: confirmed-case lookup failed ({e})", file=sys.stderr)
+        if known_cases:
+            known_case = known_cases[0]
+            parts = ["[Known confirmed cases on this host — prior verdicts, not evidence]"]
+            for kc in known_cases[:5]:
+                parts.append(
+                    f"### case #{kc['case_id']} (match: {kc['tier']}, "
+                    f"score {kc['score']})\n"
+                    f"Title: {kc['title']}\n"
+                    f"Subsystem: {kc['subsystem'] or '?'}\n"
+                    f"Root cause: {str(kc['root_cause'])[:500]}\n"
+                    f"Previously confirmed x{kc['occurrences']} (last {kc['last_seen']}).")
+            parts.append("Judge only the delta versus these known cases: are they the same "
+                         "issues, and what changed? Report any NEW issue not covered here.")
+            known_text = "\n".join(parts)
+            history_text = (history_text + "\n" + known_text).strip()
+            ids = ", ".join(f"#{kc['case_id']}" for kc in known_cases)
+            log("[4/5]", f"fast path: {len(known_cases)} confirmed case(s) matched "
+                         f"({ids}); deep collection will be skipped")
+    run_uuid = new_run_uuid()
+    client = RecordingClient(Client(cfg))
     deep_used = False
+    result = None
+    answer = ""
+    llm_error: str | None = None
     try:
         log("[4/5]", f"LLM three-tier analysis ({cfg.base_url})")
         corpus = lines + scan_lines
         make_stream = _make_stream_factory()
         result, answer = run_analysis(client, bundle, blocks_text, prefetch_text, corpus,
                                       source_text=source_text, scan_text=scan_text,
-                                      make_stream=make_stream)
+                                      make_stream=make_stream, history_text=history_text,
+                                      facts_text=facts_text)
+        if known_cases and result is not None and result.get("inconclusive_concerns"):
+            ids = ", ".join(f"#{kc['case_id']}" for kc in known_cases)
+            log("[5/5]", f"fast path: skipping deep verification (confirmed {ids})")
         if result is not None and not args.no_deep and executor is not None \
-                and result.get("inconclusive_concerns"):
+                and result.get("inconclusive_concerns") and not known_cases:
             n = len(result["inconclusive_concerns"])
             log("[5/5]", f"deep-verifying {min(n, args.max_verify)}/{n} open questions "
                          "(a password prompt may appear for root-level collection)")
             result, corpus = deep_dive(client, executor, result, lines, bundle,
                                        max_concerns=args.max_verify, extra_corpus=scan_lines,
-                                       make_stream=make_stream)
+                                       make_stream=make_stream,
+                                       max_rounds=args.deep_rounds)
             deep_used = True
     except LLMError as e:
+        llm_error = str(e)
         print(f"error: {e}", file=sys.stderr)
-        return 3
     finally:
         if executor is not None:
             executor.close()
 
     if isinstance(result, dict):
+        result["facts"] = facts
         summary = verify_result(result, corpus)
         if not args.no_knowledge:
-            host = (args.host_id or bundle.extra_context.get("machine_id") or args.ssh
-                    or (Path(args.file).name if args.file else bundle.source)).strip()[:128]
             try:
                 kb = record_run(resolve_db_path(args.knowledge_db), host, result,
                                 kernel=bundle.kernel_version, source=bundle.source,
                                 fuzzy_threshold=args.kmatch_threshold,
-                                verified=(summary.passed, summary.total))
+                                verified=(summary.passed, summary.total),
+                                run_uuid=run_uuid)
                 result["knowledge"] = kb
+                if known_cases:
+                    kb["fast_path"] = known_case
+                    kb["fast_path_cases"] = [
+                        {"case_id": kc["case_id"], "title": kc["title"]}
+                        for kc in known_cases]
                 log("[6/6]", f"case library (shadow): {len(kb['matches'])} finding(s), "
                              f"{kb['new_cases']} new, {kb['recurrences']} recurrence(s)")
             except KnowledgeError as e:
                 print(f"warning: case library not updated ({e})", file=sys.stderr)
     else:
         summary = VerifySummary()
+
+    try:
+        archive_path = write_run_archive(build_archive(
+            run_uuid=run_uuid, host=host, bundle=bundle, blocks=blocks,
+            blocks_text=blocks_text, prefetch_text=prefetch_text, scan_text=scan_text,
+            changes_text=changes_text, source_text=source_text, facts_text=facts_text,
+            exchanges=client.exchanges, result=result,
+            verify={"total": summary.total, "passed": summary.passed,
+                    "line_mismatch": summary.line_mismatch},
+            argv=argv, error=llm_error, base_url=cfg.base_url,
+            model=client.last_model or cfg.model or ""))
+        log("[6/6]", f"run archive: {archive_path}")
+    except OSError as e:
+        print(f"warning: run archive not written ({e})", file=sys.stderr)
+
+    if llm_error is not None:
+        return 3
     if getattr(client, "last_finish_reason", None) == "length":
         print("warning: model output hit the max_tokens ceiling and was truncated "
               "(results may be incomplete)", file=sys.stderr)

@@ -1,0 +1,10 @@
+{
+  "id": "rcu-stall",
+  "description": "RCU grace period stall detected on CPU 3",
+  "expect": {
+    "subsystem": ["locking"],
+    "severity": ["high"],
+    "any_keywords": ["rcu", "stall"],
+    "must_not_dismiss": []
+  }
+}

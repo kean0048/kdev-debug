@@ -1,0 +1,3 @@
+[   30.000000] mce: [Hardware Error]: Machine check events logged
+[   30.000010] mce: [Hardware Error]: CPU 3: Machine Check: 0 Bank 5: be00000000800400
+[   30.000020] mce: [Hardware Error]: TSC 0 ADDR 7ffd12340000 MISC 8000000000000000
