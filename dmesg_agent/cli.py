@@ -101,11 +101,15 @@ def _build_config_parser() -> argparse.ArgumentParser:
     sp.add_argument("key", choices=list(FILE_KEYS))
     sp.add_argument("value")
     sub.add_parser("unset", help="remove a setting").add_argument("key", choices=list(FILE_KEYS))
+    sub.add_parser("check", help="pre-flight readiness check: probe the endpoint and list "
+                                 "anything that still needs configuring")
     return p
 
 
 def _config_main(argv: list[str]) -> int:
     args = _build_config_parser().parse_args(argv)
+    if args.action == "check":
+        return _check_main()
     if args.action == "show":
         cfg = load_config()
         saved = read_file_config()
@@ -137,6 +141,67 @@ def _config_main(argv: list[str]) -> int:
         return 0
     unset_file_config(args.key)
     print(f"removed {args.key} → {config_path()}")
+    return 0
+
+
+def _check_main(client: Client | None = None) -> int:
+    """`dmesg-agent check`: pre-flight readiness probe — print every config item
+    with its source, reach-test the endpoint, and list what still needs setting.
+    Exit 0 = ready, 1 = not ready."""
+    fc = read_file_config()
+    cfg = load_config()
+    problems: list[str] = []
+
+    print("dmesg-agent pre-flight check")
+    print(f"config file: {config_path()}")
+
+    if os.environ.get("OPENAI_BASE_URL"):
+        url_src = "OPENAI_BASE_URL env var"
+    elif fc.get("base_url"):
+        url_src = "config file"
+    else:
+        url_src = ""
+    if url_src:
+        print(f"[ok]         base_url: {cfg.base_url} ({url_src})")
+    else:
+        print(f"[needs set]  base_url: {cfg.base_url} (built-in default — not explicitly configured)")
+        problems.append("base_url not configured — set it: dmesg-agent config set base_url <url>")
+
+    client = client or Client(cfg)
+    models: list[str] = []
+    try:
+        models = client.list_models()
+        print(f"[ok]         endpoint: /v1/models reachable — {len(models)} model(s)")
+        if models:
+            shown = ", ".join(models[:5]) + (" …" if len(models) > 5 else "")
+            print(f"             models: {shown}")
+    except LLMError as e:
+        print(f"[fail]       endpoint: unreachable — {e}")
+        problems.append(f"endpoint unreachable at {cfg.base_url} — check base_url and the network")
+
+    if cfg.model:
+        if models and cfg.model not in models:
+            print(f"[warn]       model: '{cfg.model}' not found in the server's model list")
+        else:
+            print(f"[ok]         model: {cfg.model}")
+    elif models:
+        print(f"[ok]         model: (auto-discover) → '{models[0]}'")
+    else:
+        print("[warn]       model: (auto-discover) — cannot confirm until the endpoint is reachable")
+
+    if cfg.api_key:
+        print("[ok]         api_key: set")
+    else:
+        print("[info]       api_key: not set (fine for unauthenticated local endpoints; "
+              "otherwise: dmesg-agent config set api_key <key>)")
+    print(f"[ok]         limits: max_tokens={cfg.max_tokens}  timeout={cfg.timeout}s")
+
+    if problems:
+        print("\nNOT ready — still needs configuring:")
+        for p in problems:
+            print(f"  - {p}")
+        return 1
+    print("\nready: all checks passed")
     return 0
 
 
@@ -232,6 +297,8 @@ def main(argv: list[str] | None = None) -> int:
         argv = sys.argv[1:]
     if argv and argv[0] == "config":
         return _config_main(argv[1:])
+    if argv and argv[0] == "check":
+        return _check_main()
     if argv and argv[0] == "eval":
         return _eval_main(argv[1:])
     args = build_parser().parse_args(argv)

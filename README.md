@@ -103,6 +103,7 @@ Subcommands:
 | Command | Meaning |
 |---|---|
 | `dmesg-agent config show\|set <k> <v>\|unset <k>` | manage `~/.config/dmesg-agent/config.json`; keys `base_url` / `model` / `api_key` / `max_tokens` / `timeout` |
+| `dmesg-agent check` (or `config check`) | pre-flight readiness: print every config item with its source, probe `/v1/models`, and list what still needs configuring (exit 1 if not ready) |
 | `dmesg-agent eval [--live] [--ab] [--json] [--min-locate F]` | run the evaluation harness (see below) |
 
 Environment variables: `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN` (fallback), `DMESG_AGENT_SSH_PASSWORD`, `DMESG_AGENT_KERNEL_SRC`, `DMESG_AGENT_VMLINUX`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` (recurrence store location). Config precedence everywhere: CLI flag > env var > config file > default.
@@ -183,6 +184,7 @@ You can also persist settings instead of passing them every time:
 dmesg-agent config set base_url http://host:port   # also model / api_key / max_tokens / timeout
 dmesg-agent config show                             # saved settings + current effective values
 dmesg-agent config unset api_key
+dmesg-agent check                             # am I ready? shows each item + what still needs setting
 ```
 
 The config file lives at `~/.config/dmesg-agent/config.json` (honors `XDG_CONFIG_HOME`, saved with mode 0600; `api_key` is stored there). Effective precedence: CLI flag > environment variable > config file > default.
