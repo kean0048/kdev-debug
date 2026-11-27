@@ -24,6 +24,14 @@ jobs:
         run: python -m pytest tests/ -q
       - name: Eval harness self-test (offline)
         run: dmesg-agent eval
+      - name: Committed software scorecard
+        run: |
+          python - <<'PY'
+          from dmesg_agent.scorecard import latest_score, format_for_check
+          card = latest_score()
+          assert card, "no weekly scorecard committed under dmesg_agent/scorecards/"
+          print(format_for_check(card))
+          PY
       - name: CLI smoke
         run: |
           dmesg-agent --version

@@ -66,6 +66,28 @@ def render(result: dict | None, bundle: RawBundle, summary: VerifySummary,
                    + (f", failed {dd.get('skipped', 0)}" if dd.get("skipped") else ""))
         out.append("")
 
+    kb = result.get("knowledge")
+    if isinstance(kb, dict) and kb.get("matches"):
+        out.append("## Case library (shadow mode)\n")
+        out.append(f"> {len(kb['matches'])} finding(s) fingerprinted into the per-host case "
+                   f"library (host `{kb.get('host', '?')}`, {kb.get('new_cases', 0)} new "
+                   f"case(s), {kb.get('recurrences', 0)} recurrence(s)). Shadow mode records "
+                   "matches without changing the analysis; confirm a case with "
+                   "`dmesg-agent cases confirm <id>` to prepare the future fast path.")
+        out.append("")
+        out.append("| Finding | Case | Match | Status | Seen | First seen |")
+        out.append("|---|---|---|---|---|---|")
+        for m in kb["matches"]:
+            idx = m.get("finding_index")
+            label = f"#{idx + 1}" if isinstance(idx, int) else "?"
+            tier = str(m.get("tier", "?"))
+            if tier == "fuzzy" and m.get("similar_case_id"):
+                tier = f"similar to #{m['similar_case_id']} ({m.get('score', '?')})"
+            out.append(f"| {label} {_esc(m.get('title', ''))} | #{m.get('case_id', '?')} "
+                       f"| {tier} | {m.get('status', '?')} | {m.get('occurrences', '?')} "
+                       f"| {m.get('first_seen', '?')} |")
+        out.append("")
+
     findings = result.get("findings", [])
     if findings:
         out.append("## Confirmed issues\n")
@@ -82,6 +104,17 @@ def render(result: dict | None, bundle: RawBundle, summary: VerifySummary,
             if rec:
                 out.append(f"- 🔁 Recurrence: seen {rec.get('count', 1)} times on this host "
                            f"(first seen {rec.get('first_seen', '?')})")
+            case = f.get("case")
+            if isinstance(case, dict):
+                extras = []
+                if case.get("similar_case_id"):
+                    extras.append(f"similar to case #{case['similar_case_id']}")
+                if case.get("regression"):
+                    extras.append("⚠ regression after being marked fixed")
+                suffix = f" — {', '.join(extras)}" if extras else ""
+                out.append(f"- 🗂 Case #{case.get('id', '?')} ({case.get('tier', '?')} match, "
+                           f"status {case.get('status', '?')}, "
+                           f"{case.get('occurrences', '?')} occurrence(s){suffix})")
             if f.get("severity_explanation"):
                 out.append(f"- Severity rationale: {f['severity_explanation']}")
             out.append(f"- Root-cause hypothesis: {f.get('root_cause_hypothesis', '(none)')}")

@@ -75,6 +75,10 @@ Pipeline switches:
 | `--no-scan` | never run the proactive scan |
 | `--no-deep` | skip deep verification of open questions |
 | `--max-verify N` | cap on deep-verified concerns (default 5) |
+| `--no-knowledge` | do not record this run into the per-host case library |
+| `--knowledge-db PATH` | case-library SQLite path (or env `DMESG_AGENT_KNOWLEDGE_DB`) |
+| `--host-id ID` | host identity for the case library (default: the analyzed machine's machine-id) |
+| `--kmatch-threshold F` | similar-case recall threshold (default 0.65) |
 
 Advanced forensics (require an executor; each degrades to a "skipped" note if its tool is missing):
 
@@ -103,12 +107,44 @@ Subcommands:
 | Command | Meaning |
 |---|---|
 | `dmesg-agent config show\|set <k> <v>\|unset <k>` | manage `~/.config/dmesg-agent/config.json`; keys `base_url` / `model` / `api_key` / `max_tokens` / `timeout` |
-| `dmesg-agent check` (or `config check`) | pre-flight readiness: print every config item with its source, probe `/v1/models`, and list what still needs configuring (exit 1 if not ready) |
+| `dmesg-agent check` (or `config check`) | pre-flight readiness: print every config item with its source, probe `/v1/models`, list what still needs configuring, and show the committed weekly software score (exit 1 if not ready) |
 | `dmesg-agent eval [--live] [--ab] [--json] [--min-locate F]` | run the evaluation harness (see below) |
+| `dmesg-agent cases list\|show\|confirm\|dismiss\|fixed` | inspect and manage the per-host case library |
+| `dmesg-agent score [--record] [--live] [--note TEXT]` | compute the weekly software scorecard; `--record` writes `dmesg_agent/scorecards/<week>.json` + `SCORECARD.md` |
 
-Environment variables: `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN` (fallback), `DMESG_AGENT_SSH_PASSWORD`, `DMESG_AGENT_KERNEL_SRC`, `DMESG_AGENT_VMLINUX`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` (recurrence store location). Config precedence everywhere: CLI flag > env var > config file > default.
+Environment variables: `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN` (fallback), `DMESG_AGENT_SSH_PASSWORD`, `DMESG_AGENT_KERNEL_SRC`, `DMESG_AGENT_VMLINUX`, `DMESG_AGENT_KNOWLEDGE_DB`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` (case-library location). Config precedence everywhere: CLI flag > env var > config file > default.
 
-Always on, no flag: model output streams live to stderr; confirmed findings are fingerprinted into the per-host recurrence store (`~/.local/state/dmesg-agent/recurrence.json`) and re-appear as "🔁 Recurrence" annotations.
+Always on, no flag: model output streams live to stderr; confirmed findings are fingerprinted into the per-host case library and re-appear as "🔁 Recurrence" annotations.
+
+### Case library (shadow mode)
+
+Every confirmed finding is reduced to a **structural fingerprint** built from its verbatim evidence quotes — matched log-signature classes, device tokens (`sda`, `ata6`, `nvme0n1`), error codes (`SErr`/`Emask`/`errno`) and subsystem routing — with volatile values (timestamps, PIDs, sectors, hex addresses) normalized away. Findings without evidence fall back to the original content-word fingerprint. State lives in SQLite at `~/.local/share/dmesg-agent/knowledge.db` (0600), per host.
+
+```bash
+dmesg-agent cases list                  # id, status, occurrences, last seen, title
+dmesg-agent cases show 3                # fingerprint core + recent occurrences
+dmesg-agent cases confirm 3             # eligible for the future fast path
+dmesg-agent cases fixed 3               # a recurrence reopens it (regression flag)
+```
+
+Matching is two-tier: an **exact** fingerprint match (same fault on the same host) versus a **similar** case recalled by token-set Jaccard ≥ `--kmatch-threshold` (0.65). Shadow mode records and reports every match — it never changes the analysis. Confirmed cases are the prerequisite for the planned fast path, where an exact hit skips full analysis and the model only judges the delta against the stored case.
+
+### Weekly scorecard
+
+`dmesg-agent check` prints the committed software score. It is computed from deterministic measurements, not model self-assessment, across three weighted dimensions:
+
+- **Architecture (35%)** — module layout, largest-module size, test density, docs/invariants, CI, dependency hygiene, annotation consistency.
+- **Accuracy (45%)** — eval-suite category coverage and case count plus the measured detect/evidence/dismissal rates from `evals/run_eval.py`. An offline stub run earns only harness-integrity points; real-model accuracy requires `--live`.
+- **Improvement (20%)** — commits, lines, and test/eval-case growth since the previous card, plus a passing pytest run. The commit list is recorded as the "why it improved" basis.
+
+Weekly ritual (maintainer):
+
+```bash
+dmesg-agent score --live --record --note "what improved and why"
+git add SCORECARD.md dmesg_agent/scorecards/ && git commit -m "scorecard: 2026-W49"
+```
+
+The JSON basis (`dmesg_agent/scorecards/<week>.json`) records every metric, per-item points and evidence strings, the eval results, and the commit list; `SCORECARD.md` is regenerated from it. Scoring history starts at **2026-W48 (v0.4.0)** — users installing later inherit that history through `check`, so the score starts from when the software shipped, not from their install date.
 
 ### Source correlation (v3)
 
@@ -136,7 +172,7 @@ dmesg-agent --live-probe                 # live kernel forensics via drgn (D-sta
 dmesg-agent --cross-boot 2               # error logs of the previous 2 boots (recurrence check)
 ```
 
-Every confirmed finding is additionally fingerprinted for **cross-run recurrence tracking**: the same bug (Jaccard ≥ 0.5 content overlap, reworded titles included) is counted across runs in `~/.local/state/dmesg-agent/recurrence.json` (0600) and reported as "🔁 Recurrence: seen N times" — no LLM tokens spent on the comparison. All four feed their output into the same prompt + evidence corpus (quoted data
+Every confirmed finding is additionally fingerprinted into the **case library** (see above): the same fault (exact structural fingerprint, or Jaccard ≥ 0.5 content overlap for evidence-less findings) is counted across runs per host and reported as "🔁 Recurrence: seen N times" plus a "🗂 Case #id" annotation — no LLM tokens spent on the comparison. All four feed their output into the same prompt + evidence corpus (quoted data
 is verbatim-verified like log lines), attach as a report appendix, and degrade
 to a one-line "skipped: <reason>" entry when crash/drgn/root/vmlinux are
 missing. `--vmlinux` also reads `DMESG_AGENT_VMLINUX`. The crash batch is a
@@ -222,4 +258,6 @@ CI runs on every push/PR (pytest on Python 3.10/3.12/3.13, offline `dmesg-agent 
 - `--file` offline mode has no executor: no scan/prefetch/deep verification — only the proactive scan, vmcore, drgn probe and cross-boot require a live or SSH target
 - vmcore analysis needs the crash utility + a matching vmlinux on hand; the agent never fetches debuginfo itself
 - the proactive scan is a fixed whitelist snapshot, not continuous monitoring; multi-turn follow-up Q&A is not implemented
+- the case library records confirmed findings only (inconclusive/dismissed signals are not stored yet); matching is per host, and the confirmed-case fast path is not enabled — the library runs in shadow mode
+- the weekly score is a maintainer-recorded artifact; without `--live` the accuracy dimension reflects only the offline harness (the missing live accuracy is shown explicitly in the basis)
 - small local models occasionally quote a line number off by 1; verify already auto-corrects and flags it

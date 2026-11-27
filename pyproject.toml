@@ -33,5 +33,8 @@ dmesg-agent = "dmesg_agent.cli:main"
 [tool.setuptools.packages.find]
 include = ["dmesg_agent*"]
 
+[tool.setuptools.package-data]
+dmesg_agent = ["scorecards/*.json"]
+
 [tool.setuptools.dynamic]
 version = {attr = "dmesg_agent.__version__"}

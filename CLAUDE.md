@@ -15,6 +15,8 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"   # install (ssh extr
 .venv/bin/dmesg-agent --file dmesg.txt --kernel 6.12 --distro "Debian 13" -o report.md
 sudo .venv/bin/dmesg-agent                                    # local full pipeline
 dmesg-agent --ssh user@host --key ~/.ssh/id_ed25519          # remote
+.venv/bin/dmesg-agent score --no-tests                        # computed scorecard (no write)
+.venv/bin/dmesg-agent score --live --record --note "why"     # weekly card into the repo
 ```
 
 No lint/format config exists in the repo. Tests are pure-Python offline (no network, no LLM calls; `tests/data/sample_dmesg.txt` is fixture input).
@@ -45,8 +47,9 @@ Key modules and the invariants that tie them together:
 - **`prompts.py`** — the three-tier contract lives here; changing schema fields requires matching changes in `analyze.validate_*` and `report.render`.
 
 - **`systemscan.py` / `vmcore.py`** — proactive whitelisted scan for problems dmesg cannot show (failed units, userspace crashes, disk/inode, load/PSI, package state, net config), plus crash(8)/drgn/cross-boot evidence. Their output renders via `prompts.render_scan`, joins the evidence corpus (`run_analysis`'s corpus argument, `deep_dive(extra_corpus=)`), and lands in the report's scan/forensics appendix.
-- **`tracking.py`** — zero-token recurrence store: content-word fingerprint (sha256 of sorted stopword-free words) + Jaccard ≥ 0.5 near-duplicate merge, keyed per host in `~/.local/state/dmesg-agent/recurrence.json` (0600, atomic); cli annotates recurring findings after verify.
+- **`knowledge.py`** — per-host case library in SQLite (`$XDG_DATA_HOME/dmesg-agent/knowledge.db`, 0600; `--knowledge-db` / `DMESG_AGENT_KNOWLEDGE_DB`). Evidence-based structural fingerprints (sig classes + devices + error codes + subsystem; volatile numbers normalized) with a content-word fallback for evidence-less findings. Two-tier matching: exact fingerprint vs Jaccard ≥ `--kmatch-threshold` (0.65) similar recall. **Shadow mode**: `record_run` annotates findings (`recurrence`, `case`) and returns the match summary for `result["knowledge"]`, but never alters conclusions. Statuses candidate/confirmed/dismissed/fixed, managed via `dmesg-agent cases …`; a recurrence of a `fixed` case reopens it as a regression. Confirmed cases are the prerequisite for the planned fast path (LLM judges only the delta).
 - **`evals/run_eval.py`** — known-answer harness: `evals/cases/<name>/{log.txt,expected.json}` scored for locate/severity/evidence(no-hallucination)/dismissal; offline stub client keeps it network-free (guarded by `tests/test_eval.py`); `--live` hits the real endpoint, `--ab` compares triage-on vs whole-log.
+- **`scorecard.py`** — weekly software scorecard (architecture 35% / accuracy 45% / improvement 20%) built only from deterministic measurements: repo metrics, the eval harness (stub or `--live`), and git growth since the previous card. `dmesg-agent score --record` writes `dmesg_agent/scorecards/<week>.json` (full basis: per-item points + evidence + commits) and regenerates `SCORECARD.md`; both are committed. `dmesg-agent check` prints the committed score; scoring history starts at `SCORING_START` (2026-W48, v0.4.0). Cards are packaged via `[tool.setuptools.package-data]`.
 
 Exit codes: 2 = collect/triage error, 3 = LLM error, 4 = model returned no parseable JSON, 0 = success.
 

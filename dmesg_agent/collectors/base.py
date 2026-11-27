@@ -20,6 +20,7 @@ class RawBundle:
 CONTEXT_COMMANDS: list[tuple[str, str]] = [
     ("kernel_version", "uname -r"),
     ("distro", "cat /etc/os-release | head -5"),
+    ("machine_id", "cat /etc/machine-id 2>/dev/null || hostname"),
     ("cpu", "nproc"),
     ("mem", "free -h | head -3"),
     ("modules", "lsmod | awk 'NR>1{print $1}' | sort | paste -sd' ' -"),

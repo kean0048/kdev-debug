@@ -22,14 +22,15 @@ from .config import (
 )
 from .errors import CollectError
 from .executors import Executor, LocalExecutor, SSHExecutor
+from .knowledge import DEFAULT_FUZZY, KnowledgeError, cases_main, record_run, resolve_db_path
 from .llm import Client, LLMError
 from .passwds import PassResolver
 from .srcmap import SrcMap, extract_symbols
 from .systemscan import run_cross_boot, run_live_probe, run_system_scan
-from .tracking import record_recurrences
 from .playbooks import run_prefetch
 from .prompts import render_prefetch, render_scan
 from .report import render
+from .scorecard import format_for_check, latest_score, score_main
 from .triage import Block, find_blocks, render_blocks
 from .verify import VerifySummary, verify_result
 from .vmcore import analyze_vmcore
@@ -77,6 +78,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="live kernel data-structure forensics via drgn (/proc/kcore, needs root)")
     p.add_argument("--cross-boot", type=int, default=0, metavar="N",
                    help="correlate error-level kernel logs of the previous N boots (recurrence check)")
+    p.add_argument("--no-knowledge", action="store_true",
+                   help="do not record this run into the per-host case library")
+    p.add_argument("--knowledge-db", metavar="PATH",
+                   help="case-library SQLite path (default: $XDG_DATA_HOME/dmesg-agent/knowledge.db, "
+                        "or DMESG_AGENT_KNOWLEDGE_DB)")
+    p.add_argument("--host-id", metavar="ID",
+                   help="host identity for the case library (default: the analyzed machine's "
+                        "machine-id; file mode falls back to the log path)")
+    p.add_argument("--kmatch-threshold", type=float, default=DEFAULT_FUZZY, metavar="F",
+                   help=f"similarity threshold for similar-case recall (default {DEFAULT_FUZZY})")
     p.add_argument("--max-tokens", type=int, help="model output ceiling (default 32768)")
     p.add_argument("--model", help="model name (default: auto-discover)")
     p.add_argument("--base-url", help="OpenAI-compatible API base URL")
@@ -196,6 +207,13 @@ def _check_main(client: Client | None = None) -> int:
               "otherwise: dmesg-agent config set api_key <key>)")
     print(f"[ok]         limits: max_tokens={cfg.max_tokens}  timeout={cfg.timeout}s")
 
+    card = latest_score()
+    if card:
+        print(f"[ok]         {format_for_check(card)}")
+    else:
+        print("[info]       software score: no weekly scorecard in this build "
+              "(record one with `dmesg-agent score --record`)")
+
     if problems:
         print("\nNOT ready — still needs configuring:")
         for p in problems:
@@ -301,6 +319,10 @@ def main(argv: list[str] | None = None) -> int:
         return _check_main()
     if argv and argv[0] == "eval":
         return _eval_main(argv[1:])
+    if argv and argv[0] == "cases":
+        return cases_main(argv[1:])
+    if argv and argv[0] == "score":
+        return score_main(argv[1:])
     args = build_parser().parse_args(argv)
     log = _Log(args.verbose)
     resolver = PassResolver(args.askpass)
@@ -419,11 +441,19 @@ def main(argv: list[str] | None = None) -> int:
 
     if isinstance(result, dict):
         summary = verify_result(result, corpus)
-        host = args.ssh or bundle.source
-        try:
-            record_recurrences(result, host)
-        except OSError as e:
-            print(f"warning: recurrence state not updated ({e})", file=sys.stderr)
+        if not args.no_knowledge:
+            host = (args.host_id or bundle.extra_context.get("machine_id") or args.ssh
+                    or (Path(args.file).name if args.file else bundle.source)).strip()[:128]
+            try:
+                kb = record_run(resolve_db_path(args.knowledge_db), host, result,
+                                kernel=bundle.kernel_version, source=bundle.source,
+                                fuzzy_threshold=args.kmatch_threshold,
+                                verified=(summary.passed, summary.total))
+                result["knowledge"] = kb
+                log("[6/6]", f"case library (shadow): {len(kb['matches'])} finding(s), "
+                             f"{kb['new_cases']} new, {kb['recurrences']} recurrence(s)")
+            except KnowledgeError as e:
+                print(f"warning: case library not updated ({e})", file=sys.stderr)
     else:
         summary = VerifySummary()
     if getattr(client, "last_finish_reason", None) == "length":
