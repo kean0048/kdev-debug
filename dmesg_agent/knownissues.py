@@ -17,6 +17,7 @@ plugin) feeds it and `known_issue_lookup` (context plugin) queries it.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import re
 from dataclasses import dataclass
@@ -219,7 +220,7 @@ def _now() -> str:
 
 class KnownIssueStore:
     def __init__(self, db_path: str | Path | None = None):
-        self.db_path = Path(db_path) if db_path else data_dir() / "known-issues.db"
+        self.db_path = Path(db_path) if db_path else default_store_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._conn = sqlite3.connect(str(self.db_path), timeout=30)
         self._conn.row_factory = sqlite3.Row
@@ -371,6 +372,58 @@ class KnownIssueStore:
             "SELECT * FROM known_issues WHERE series_key=? LIMIT 1", (key,)).fetchone()
         return self._row_dict(row) if row else None
 
+    def search(self, *, fingerprint: str = "", fault_classes=None,
+               subsystems=None, tokens=None, limit: int = 5) -> list[dict]:
+        """Recall known issues for a live diagnosis.
+
+        Ranking is structural, not probabilistic: an exact fingerprint beats a
+        shared fault class, which beats a bare subsystem match, and token
+        Jaccard similarity adds a graded signal. Subsystem-only matches are
+        dropped — too weak to present as a known issue.
+        """
+        q_classes = {str(x) for x in (fault_classes or ())
+                     if x and x != "unclassified"}
+        q_subs = {str(x) for x in (subsystems or ())
+                  if x and x != "unclassified"}
+        q_tokens = {str(t).lower() for t in (tokens or ()) if t}
+        rows = self._conn.execute(
+            "SELECT id, source, source_id, urls_json, subsystem, fault_class, "
+            "fingerprint, tokens_json, title, symptom, root_cause, fix_json, "
+            "confidence, log_snippets_json, extracted, status "
+            "FROM known_issues ORDER BY id DESC").fetchall()
+        out: list[dict] = []
+        for row in rows:
+            row_tokens = set(json.loads(row["tokens_json"]))
+            sim = (len(q_tokens & row_tokens) / len(q_tokens | row_tokens)
+                   if q_tokens and row_tokens else 0.0)
+            score = 0
+            why: list[str] = []
+            if fingerprint and row["fingerprint"] == fingerprint:
+                score += 100
+                why.append("exact fingerprint")
+            if row["fault_class"] in q_classes:
+                score += 40
+                why.append(f"same fault class ({row['fault_class']})")
+            if row["subsystem"] in q_subs:
+                score += 10
+                why.append("same subsystem")
+            if sim >= 0.25:
+                score += round(sim * 50)
+                why.append(f"token similarity {sim:.2f}")
+            if score <= 10:  # subsystem-only is too weak to act on
+                continue
+            d = dict(row)
+            d["urls"] = json.loads(d.pop("urls_json"))
+            d["tokens"] = json.loads(d.pop("tokens_json"))
+            d["fix"] = json.loads(d.pop("fix_json"))
+            d["log_snippets"] = json.loads(d.pop("log_snippets_json"))
+            d["similarity"] = round(sim, 3)
+            d["score"] = score
+            d["match"] = ", ".join(why)
+            out.append(d)
+        out.sort(key=lambda d: (d["score"], d["id"]), reverse=True)
+        return out[:max(1, limit)]
+
     @staticmethod
     def _row_dict(row: sqlite3.Row) -> dict:
         d = dict(row)
@@ -413,4 +466,5 @@ class KnownIssueStore:
 
 
 def default_store_path() -> Path:
-    return data_dir() / "known-issues.db"
+    env = os.environ.get("DMESG_AGENT_KNOWN_ISSUES_DB", "").strip()
+    return Path(env).expanduser() if env else data_dir() / "known-issues.db"

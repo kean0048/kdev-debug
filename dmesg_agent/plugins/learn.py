@@ -31,6 +31,7 @@ from ..knownissues import (KnownIssueStore, classify_text, is_noise_issue,
                            series_key as series_key_for)
 from ..llm import Client, LLMError
 from ..providers import provider_choices
+from ..trackers import fetch_bugzilla, fetch_gitlab, fetch_launchpad
 from . import register
 
 LORE_UA = f"dmesg-agent/{__version__} (+Kean Ren <renhai2.k@gmail.com>)"
@@ -223,6 +224,20 @@ def build_parser() -> argparse.ArgumentParser:
                         "(POST form; no message-id needed; repeatable)")
     p.add_argument("--full-threads", action="store_true",
                    help="with --lore-search, download full threads instead of results only")
+    p.add_argument("--tracker-query", metavar="QUERY",
+                   help="query for the REST trackers (--bugzilla/--launchpad/--gitlab)")
+    p.add_argument("--bugzilla", metavar="BASE", action="append", default=[],
+                   help="Bugzilla base URL, e.g. https://bugzilla.kernel.org or "
+                        "https://bugzilla.redhat.com (repeatable)")
+    p.add_argument("--launchpad", action="store_true",
+                   help="search Launchpad bugs")
+    p.add_argument("--gitlab", metavar="PROJECT_URL", action="append", default=[],
+                   help="GitLab project URL, e.g. https://gitlab.gnome.org/GNOME/mutter "
+                        "(repeatable)")
+    p.add_argument("--tracker-limit", type=int, default=25,
+                   help="max issues per tracker source (default 25)")
+    p.add_argument("--gitlab-token", default=None,
+                   help="GitLab token for private projects (or GITLAB_TOKEN)")
     p.add_argument("--max-download-mb", type=int, default=128,
                    help="cap for one lore search mbox (default 128 MB)")
     p.add_argument("--source", default="lore", help="source label (default: lore)")
@@ -335,9 +350,16 @@ def _ingest(store: KnownIssueStore, issues: list[dict], args, seen: set[str],
           description="ingest community issues (lore mbox) into the known-issue store")
 def learn(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
-    if not args.mbox and not args.lore_search:
-        print("error: no input — pass --mbox /path/to/lore.mbox or "
-              "--lore-search 'query' (bulk, no message-id needed)", file=sys.stderr)
+    trackers_requested = bool(args.bugzilla or args.launchpad or args.gitlab)
+    if not args.mbox and not args.lore_search and not trackers_requested:
+        print("error: no input — pass --mbox /path/to/lore.mbox, "
+              "--lore-search 'query' (bulk, no message-id needed), or a REST "
+              "tracker (--bugzilla/--launchpad/--gitlab with --tracker-query)",
+              file=sys.stderr)
+        return 2
+    if trackers_requested and not args.tracker_query:
+        print("error: --tracker-query is required with "
+              "--bugzilla/--launchpad/--gitlab", file=sys.stderr)
         return 2
     store = KnownIssueStore(args.db)
     seen: set[str] = set()
@@ -353,6 +375,36 @@ def learn(argv: list[str]) -> int:
     try:
         while True:
             total = {"new": 0, "dedup": 0, "filtered": 0}
+            tracker_jobs = ([("bugzilla", base) for base in args.bugzilla]
+                            + ([("launchpad", "")] if args.launchpad else [])
+                            + [("gitlab", project) for project in args.gitlab])
+            for kind, target in tracker_jobs:
+                label = target or kind
+                print(f"{kind} search: {args.tracker_query!r} at {label} — waiting…",
+                      file=sys.stderr, flush=True)
+                try:
+                    if kind == "bugzilla":
+                        issues = fetch_bugzilla(target, args.tracker_query,
+                                                limit=args.tracker_limit)
+                    elif kind == "launchpad":
+                        issues = fetch_launchpad(args.tracker_query,
+                                                 limit=args.tracker_limit)
+                    else:
+                        issues = fetch_gitlab(
+                            target, args.tracker_query, limit=args.tracker_limit,
+                            token=args.gitlab_token
+                            or os.environ.get("GITLAB_TOKEN", ""))
+                except ValueError as e:
+                    print(f"error: {kind} {label}: {e}", file=sys.stderr)
+                    failed = True
+                    continue
+                if args.verbose:
+                    print(f"  {len(issues)} issue(s) from {label}",
+                          file=sys.stderr, flush=True)
+                res = _ingest(store, issues, args, seen, client=client, state=state)
+                total["new"] += res["new"]
+                total["dedup"] += res["dedup"]
+                total["filtered"] += res["filtered"]
             paths = list(args.mbox)
             temps: list[str] = []
             try:

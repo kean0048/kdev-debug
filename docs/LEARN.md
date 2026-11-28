@@ -84,6 +84,8 @@ s.stats()                    # L1/L2 bucket counts
 s.list(subsystem="storage")  # every class under storage
 s.list("storage", "ata")     # the L3 bucket for ata
 s.get(42)                    # one record with root_cause/fix/urls
+s.search(fingerprint=fp, fault_classes=["nvme"], subsystems=["storage"],
+         tokens=tokens)      # diagnosis-time recall ranking
 ```
 
 A `dmesg-agent known-issues` command plugin (browse/manage) and the
@@ -113,16 +115,73 @@ dmesg-agent learn --lore-search 'nvmet-tcp TLS handshake timeout' \
 - Inspect with `KnownIssueStore.get(id)` (`symptom`, `root_cause`, `fix`,
   `log_snippets`, `confidence`, `extraction_model`).
 
-## What is NOT here yet (later stages)
+## Stage 3: public bug-tracker REST adapters
 
-- **REST adapters** for bugzilla.kernel.org / launchpad / GNOME GitLab / Fedora
-  bugzilla (stage 3).
-- **Diagnosis-time recall** (`known_issue_lookup` context plugin, stage 4).
-- **GitHub Actions** scheduled ingestion (stage 5).
+`--tracker-query QUERY` drives the REST sources; each source is optional and
+repeatable, and results flow through the same `classify → noise filter →
+dedup → (optional) extract` pipeline as lore mail:
+
+```bash
+dmesg-agent learn --tracker-query 'nvme timeout' \
+  --bugzilla https://bugzilla.kernel.org \
+  --bugzilla https://bugzilla.redhat.com \
+  --launchpad \
+  --gitlab https://gitlab.gnome.org/GNOME/mutter \
+  --tracker-limit 25
+```
+
+- **Bugzilla** (kernel.org, Fedora): `/rest/bug?quicksearch=…` plus comment 0
+  (the reporter's log excerpt). Source label `bugzilla:<host>`, URL
+  `show_bug.cgi?id=…`. Public bugs only; no API key.
+- **Launchpad**: `bugs.searchTasks` on `api.launchpad.net`, then each matched
+  bug's title/description; searches all statuses.
+- **GitLab**: `/api/v4/projects/<url-encoded path>/issues` with `state=all`
+  (open and closed); `--gitlab-token` or `GITLAB_TOKEN` for private projects.
+- A failing source is a per-source warning; the other sources still ingest.
+
+All adapters send a fixed honest User-Agent and only read public APIs.
+
+## Stage 4: diagnosis-time recall
+
+The `known_issues` context plugin runs after triage in every diagnosis
+(`dmesg_agent/plugins/context_known_issues.py`):
+
+1. classifies the selected log blocks with `classify_text` (the same rules as
+   ingest);
+2. calls `KnownIssueStore.search()` — exact fingerprint 100, same fault class
+   40, same subsystem 10, token Jaccard ≥ 0.25 adds up to 50; subsystem-only
+   matches are dropped as too weak;
+3. injects up to four records (title, known cause, fix, first URL) into the
+   analysis prompt, explicitly marked **external reports — not evidence**.
+   The model may use them to sharpen root cause/next steps, but every
+   `evidence.quote` must still come from this host's log or collected output.
+
+Flags: `--known-issues-db PATH` (or `DMESG_AGENT_KNOWN_ISSUES_DB`) and
+`--no-known-issues`. With no store present the plugin is a no-op, so a fresh
+install behaves exactly as before.
+
+## Stage 5: scheduled ingestion
+
+`.github/workflows/known-issues.yml` runs weekly (and on demand): installs the
+package, runs a small query set against lore and Bugzilla, checkpoints the
+SQLite WAL, and uploads the store as the `known-issues-db` artifact. Download
+it and pass `--known-issues-db`; extraction stays local because it needs the
+configured LLM.
+
+## Still open
+
+- **lore full-archive adapter**: `git clone https://lore.kernel.org/all/` plus
+  incremental `git pull`, instead of per-query downloads.
+- **SQLite FTS** if the store grows past a few tens of thousands of records
+  (`search()` currently scans the compact table).
+- **Multi-label ranking**: a reply quoting an unrelated signature can still
+  land in a secondary L1 bucket; title-specific routing covers the common case.
 
 ## Etiquette / compliance
 
 Use the official APIs and public archives — no scraping, no user-agent
-spoofing. A fixed, honest User-Agent is set by the tool. For lore, prefer
+spoofing. A fixed, honest User-Agent is set by the tool. Bug trackers are
+queried through their REST APIs with a per-source cap (`--tracker-limit`) and
+comment fetches only for matched bugs. For lore, prefer
 `git clone https://lore.kernel.org/all/` and incremental `git pull` over
-re-downloading; for bug trackers use their REST APIs and rate-limit.
+re-downloading.

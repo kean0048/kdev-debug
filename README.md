@@ -61,6 +61,7 @@ dmesg-agent score --no-tests
 dmesg-agent plugins list
 dmesg-agent cases list
 dmesg-agent learn --mbox lore.mbox --verbose   # ingest community issues (see docs/LEARN.md)
+dmesg-agent learn --tracker-query 'nvme timeout' --bugzilla https://bugzilla.kernel.org --launchpad
 ```
 
 Every command supports `--help`; the complete option and subcommand reference follows the examples.
@@ -136,6 +137,8 @@ Pipeline switches:
 | `--deep-rounds N` | max collection rounds per open question (default 2; a second round is routed by the model's stated gap) |
 | `--no-knowledge` | do not record this run into the per-host case library (history injection and fast path are skipped too) |
 | `--knowledge-db PATH` | case-library SQLite path (or env `DMESG_AGENT_KNOWLEDGE_DB`) |
+| `--known-issues-db PATH` | community known-issue store for diagnosis-time recall (or env `DMESG_AGENT_KNOWN_ISSUES_DB`) |
+| `--no-known-issues` | skip community known-issue recall in the analysis prompt |
 | `--host-id ID` | host identity for the case library (default: machine-id on live/SSH; hostname parsed from journalctl lines for `--file`; the file name is a warned last resort) |
 | `--kmatch-threshold F` | similar-case recall threshold (default 0.65) |
 
@@ -224,6 +227,9 @@ dmesg-agent learn --mbox lore.mbox [--source lore] [--since 2024-01-01]
 dmesg-agent learn --lore-search 'nvme timeout' [--full-threads]
                   [--max-download-mb 128] [--limit N] [--verbose]
                   [--extract --max-extract 25] [--provider NAME] [--base-url URL]
+dmesg-agent learn --tracker-query 'nvme timeout'
+                  [--bugzilla BASE]... [--launchpad] [--gitlab PROJECT_URL]...
+                  [--tracker-limit 25] [--gitlab-token TOKEN]
 ```
 
 `--lore-search` pulls a search-result mbox directly (POST form) — **no
@@ -475,11 +481,12 @@ It is a `command` plugin: `DMESG_AGENT_DISABLE_PLUGINS=web` (or deleting
 
 ## Known-issue store (plugin)
 
-`dmesg-agent learn` ingests community issues (lore mbox in stage 1) into a
-small **three-level index** — subsystem (L1) → fault class (L2) → structural
-fingerprint (L3) — built with the *same* `triage`/`playbooks`/`knowledge` rules
-that classify a live dmesg. Only the index + a one-line summary + an external
-URL are stored (~0.6 KB/record); duplicate sources merge by fingerprint.
+`dmesg-agent learn` ingests community issues (lore mbox, plus public Bugzilla /
+Launchpad / GitLab REST sources) into a small **three-level index** —
+subsystem (L1) → fault class (L2) → structural fingerprint (L3) — built with
+the *same* `triage`/`playbooks`/`knowledge` rules that classify a live dmesg.
+Only the index + a one-line summary + an external URL are stored (~0.6 KB/
+record); duplicate sources merge by fingerprint.
 
 ```bash
 # bulk: one search, no message-id needed (POST form under the hood)
@@ -494,6 +501,15 @@ dmesg-agent learn --lore-search 'nvmet-tcp TLS handshake timeout' \
 dmesg-agent learn --mbox lore.mbox.gz --verbose
 dmesg-agent learn --mbox lore.mbox.gz --since 2024-01-01 --limit 1000
 dmesg-agent learn --mbox lore.mbox.gz --loop --interval 3600   # continuous update
+
+# stage 3: public bug-tracker REST adapters (kernel.org + Fedora share the
+# Bugzilla API; Launchpad and GitLab use their own)
+dmesg-agent learn --tracker-query 'nvme timeout' \
+  --bugzilla https://bugzilla.kernel.org \
+  --bugzilla https://bugzilla.redhat.com \
+  --launchpad \
+  --gitlab https://gitlab.gnome.org/GNOME/mutter \
+  --tracker-limit 25
 ```
 
 `.mbox.gz` is supported; HTML pages are rejected with a clear error. Ingest
@@ -502,8 +518,17 @@ version bumps, GIT PULL/ANNOUNCE/CVE digests, and pure discussion with only a
 generic signature. Patch-series versions (v1/v2/v3 + `Re:`) and cross-source
 duplicates merge into one record with multiple URLs. See `docs/LEARN.md`.
 
-Diagnosis-time recall (`known_issue_lookup` context plugin) and the
-bugzilla/launchpad/GitLab/Fedora adapters are the next stages.
+**Diagnosis-time recall** (stage 4): the `known_issues` context plugin
+classifies the selected log blocks with the same rules, ranks matches (exact
+fingerprint > same fault class > same subsystem > token similarity) and
+injects up to four records into the analysis prompt, explicitly marked as
+external reports — never as evidence. Select a store with
+`--known-issues-db` / `DMESG_AGENT_KNOWN_ISSUES_DB`; disable with
+`--no-known-issues`.
+
+The ingest sources run on a schedule in GitHub Actions
+(`.github/workflows/known-issues.yml`); the rebuilt SQLite store is uploaded
+as a workflow artifact for local use with `--known-issues-db`.
 
 ## Development
 

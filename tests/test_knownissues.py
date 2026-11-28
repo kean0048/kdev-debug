@@ -378,6 +378,35 @@ def test_iter_mbox_decodes_rfc2047_subject(tmp_path):
     assert "CI.Hooks" in issues[0]["title"]
 
 
+def test_search_ranks_exact_fingerprint_before_same_class(tmp_path):
+    store = KnownIssueStore(tmp_path / "ki.db")
+    line0 = "[1.0] nvme nvme0: I/O 12 timeout, reset controller"
+    line1 = "[2.0] nvme nvme1: I/O 99 timeout, reset controller"
+    c0 = classify_text("nvme timeout", line0)
+    c1 = classify_text("nvme timeout", line1)
+    assert c0.fault_class == c1.fault_class == "nvme"
+    assert c0.fingerprint != c1.fingerprint
+    store.upsert(source="lore", source_id="m0", url="u0", title="a",
+                 classification=c0)
+    store.upsert(source="lore", source_id="m1", url="u1", title="b",
+                 classification=c1)
+    hits = store.search(fingerprint=c0.fingerprint, fault_classes=c0.fault_classes,
+                        subsystems=c0.subsystems, tokens=c0.tokens)
+    assert [h["id"] for h in hits[:2]] == [1, 2]
+    assert "exact fingerprint" in hits[0]["match"]
+    assert "same fault class" in hits[1]["match"]
+
+
+def test_search_ignores_unrelated_issues(tmp_path):
+    store = KnownIssueStore(tmp_path / "ki.db")
+    oom = classify_text("oom", "[1.0] Out of memory: Killed process 1 (x)")
+    store.upsert(source="lore", source_id="m1", url="u", title="oom",
+                 classification=oom)
+    q = classify_text("nvme timeout", "[2.0] nvme nvme0: I/O 12 timeout")
+    assert store.search(fingerprint=q.fingerprint, fault_classes=q.fault_classes,
+                        subsystems=q.subsystems, tokens=q.tokens) == []
+
+
 def test_noise_filter_pull_tag_anywhere():
     # lore prefixes list tags: [Intel-gfx] [PULL] drm-misc-next must still be
     # rejected, as must a Re: [GIT PULL] mail.

@@ -96,6 +96,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--knowledge-db", metavar="PATH",
                    help="case-library SQLite path (default: $XDG_DATA_HOME/dmesg-agent/knowledge.db, "
                         "or DMESG_AGENT_KNOWLEDGE_DB)")
+    p.add_argument("--known-issues-db", metavar="PATH",
+                   help="community known-issue store for diagnosis-time recall "
+                        "(default: $XDG_DATA_HOME/dmesg-agent/known-issues.db, "
+                        "or DMESG_AGENT_KNOWN_ISSUES_DB)")
+    p.add_argument("--no-known-issues", action="store_true",
+                   help="skip community known-issue recall in the analysis prompt")
     p.add_argument("--host-id", metavar="ID",
                    help="host identity for the case library (default: the analyzed machine's "
                         "machine-id; file mode falls back to the log path)")
@@ -616,7 +622,8 @@ def _run_cli(argv: list[str] | None = None) -> int:
             ctx.client, bundle, ctx.blocks_text, ctx.prefetch_text, ctx.corpus,
             source_text=ctx.source_text, scan_text=ctx.scan_text,
             make_stream=ctx.make_stream, history_text=ctx.history_text,
-            facts_text=ctx.facts_text, issue_text=ctx.issue_text)
+            facts_text=ctx.facts_text, issue_text=ctx.issue_text,
+            known_issues_text=ctx.known_issues_text)
         if ctx.known_cases and ctx.result is not None \
                 and ctx.result.get("inconclusive_concerns"):
             ids = ", ".join(f"#{kc['case_id']}" for kc in ctx.known_cases)

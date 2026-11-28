@@ -67,7 +67,7 @@ USER_TEMPLATE = """[Source] {source}
 [Distro] {distro}
 [System context]
 {context}
-{scan}{issue}{history}{facts}{prefetch}{source_ctx}
+{scan}{issue}{history}{known_issues}{facts}{prefetch}{source_ctx}
 Below are preselected suspicious log segments. Each line is formatted as `line_number: original text`, where line_number is the true line number in the original log:
 
 {blocks}
@@ -95,7 +95,7 @@ Rules:
 def build_messages(bundle: RawBundle, blocks_text: str, prefetch_text: str = "",
                    source_text: str = "", scan_text: str = "",
                    history_text: str = "", facts_text: str = "",
-                   issue_text: str = "") -> list[dict]:
+                   issue_text: str = "", known_issues_text: str = "") -> list[dict]:
     context = json.dumps(bundle.extra_context, ensure_ascii=False, indent=2) if bundle.extra_context else "(none)"
     prefetch = f"[Prefetched system state]\n{prefetch_text}\n" if prefetch_text else ""
     scan = (f"[Proactive system scan — problems that do not appear in the kernel log]\n"
@@ -105,6 +105,12 @@ def build_messages(bundle: RawBundle, blocks_text: str, prefetch_text: str = "",
     history = (f"[Case history on this host — prior runs, not evidence]\n{history_text}\n"
                f"Re-check these expectations against the current log and report what changed.\n"
                ) if history_text else ""
+    known = (f"[Known issues from the community knowledge base — upstream reports "
+             f"and patches, NOT evidence from this host]\n{known_issues_text}\n"
+             f"If one is a plausible match, say so explicitly and use it to sharpen "
+             f"the root cause and next steps. Never cite it as evidence: every "
+             f"evidence.quote must still come verbatim from this host's log or "
+             f"collected output.\n") if known_issues_text else ""
     facts = (f"[Deterministic facts — extracted by rules from the log and collected output]\n"
              f"{facts_text}\n"
              f"These facts are authoritative; do not contradict them. Use them to anchor "
@@ -112,8 +118,8 @@ def build_messages(bundle: RawBundle, blocks_text: str, prefetch_text: str = "",
     source_ctx = f"\n{source_text}\n" if source_text else ""
     user = USER_TEMPLATE.format(
         source=bundle.source, kernel=bundle.kernel_version, distro=bundle.distro,
-        context=context, scan=scan, issue=issue, history=history, facts=facts,
-        prefetch=prefetch, source_ctx=source_ctx, blocks=blocks_text,
+        context=context, scan=scan, issue=issue, history=history, known_issues=known,
+        facts=facts, prefetch=prefetch, source_ctx=source_ctx, blocks=blocks_text,
     )
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -144,6 +150,32 @@ def render_history(history: dict | None, max_chars: int = 2_000) -> str:
     text = "\n".join(parts)
     if len(text) > max_chars:
         text = text[:max_chars].rsplit("\n", 1)[0] + "\n... (history truncated) ..."
+    return text
+
+
+def render_known_issues(matches: list[dict], max_chars: int = 1_800) -> str:
+    """Render known-issue matches as external context (token-bounded)."""
+    parts: list[str] = []
+    for m in matches:
+        title = " ".join(str(m.get("title", "")).split())[:140]
+        parts.append(f"- #{m.get('id')} [{m.get('subsystem') or '?'}/"
+                     f"{m.get('fault_class') or '?'}] {title} "
+                     f"(match: {m.get('match', '')})")
+        if m.get("symptom"):
+            parts.append(f"  Symptom: {str(m['symptom'])[:160]}")
+        if m.get("root_cause"):
+            parts.append(f"  Known cause: {str(m['root_cause'])[:180]}")
+        fix = m.get("fix") or {}
+        bits = [f"{k}={fix[k]}" for k in ("commit", "upgrade_to", "workaround")
+                if fix.get(k)]
+        if bits:
+            parts.append("  Known fix: " + "; ".join(bits))
+        urls = m.get("urls") or []
+        if urls:
+            parts.append(f"  Ref: {urls[0]}")
+    text = "\n".join(parts)
+    if len(text) > max_chars:
+        text = text[:max_chars].rsplit("\n", 1)[0] + "\n... (more matches omitted) ..."
     return text
 
 

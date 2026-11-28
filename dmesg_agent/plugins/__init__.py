@@ -69,6 +69,8 @@ class RunContext:
 
     issue_text: str = ""
     history_text: str = ""
+    known_issues_text: str = ""
+    known_issues: list[dict] = field(default_factory=list)
     facts: list[dict] = field(default_factory=list)
     facts_text: str = ""
 

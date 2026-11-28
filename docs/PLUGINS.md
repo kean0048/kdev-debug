@@ -27,7 +27,7 @@ Every plugin function carries `@register(kind, ...)` from
 |---|---|---|
 | `source` | `fn(ctx) -> bool` | claim the input and set `ctx.bundle` (and optional `ctx.offline_sources`); `False` = not mine |
 | `collect` | `fn(ctx) -> None` | gather evidence before the LLM; merge into `ctx.scan_text`/`ctx.scan_lines`/`ctx.prefetch_text`/`ctx.facts*` |
-| `context` | `fn(ctx) -> None` | inject prompt context (`ctx.issue_text`, `ctx.history_text`, `ctx.known_cases`) |
+| `context` | `fn(ctx) -> None` | inject prompt context (`ctx.issue_text`, `ctx.history_text`, `ctx.known_issues_text`, `ctx.known_cases`) |
 | `deep` | `fn(ctx) -> None` | per-concern collection + verdict after the first pass; set `ctx.result`/`ctx.corpus`/`ctx.deep_used` |
 | `post` | `fn(ctx) -> None` | result post-processing (`ctx.result["knowledge"]`, `ctx.archive_path`) |
 | `render` | `fn(ctx) -> str \| None` | alternate output; named `brief` / `html` |
@@ -102,6 +102,7 @@ The core degrades explicitly and visibly:
 | `collect_*` | `--scan`/`--vmcore`/`--live-probe`/`--cross-boot`/`--kernel-src` print “plugin not installed; ignoring” |
 | `context_issue` | `--issue` warns and is ignored |
 | `context_history` | no prior-case context, no fast path (deep runs normally) |
+| `context_known_issues` | no community known-issue recall; diagnosis is unchanged otherwise |
 | `deep` | open questions stay open; a note is logged |
 | `post_knowledge` | no case library update |
 | `post_archive` | no run archive |
