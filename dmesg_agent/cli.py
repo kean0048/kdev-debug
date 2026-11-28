@@ -485,7 +485,7 @@ def _warn_plugin(fn, kind: str, e: Exception) -> None:
           f"({type(e).__name__}: {e}); continuing", file=sys.stderr)
 
 
-def main(argv: list[str] | None = None) -> int:
+def _run_cli(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
     argv = list(argv)
@@ -695,6 +695,15 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(f"HTML report written to {path}", file=sys.stderr)
     return 0 if ctx.result is not None else 4
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point: turn Ctrl-C into a clean exit (130, no traceback)."""
+    try:
+        return _run_cli(argv)
+    except KeyboardInterrupt:
+        print("\ninterrupted — no report written", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

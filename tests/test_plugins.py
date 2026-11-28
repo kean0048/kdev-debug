@@ -243,3 +243,16 @@ def test_source_plugin_claims_gzipped_nvidia(tmp_path):
     assert fn(ctx) is True
     assert "NVRM: Out of memory" in ctx.bundle.dmesg_text
     assert any(label == "nvidia-bug-report (full)" for label, _ in ctx.offline_sources)
+
+
+def test_ctrl_c_exits_gracefully(monkeypatch, capsys):
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "run_analysis", interrupted)
+    code = cli.main(["--file", str(SAMPLE), "--no-knowledge",
+                     "--base-url", "http://127.0.0.1:9"])
+    captured = capsys.readouterr()
+    assert code == 130
+    assert "interrupted" in captured.err
+    assert "Traceback" not in captured.err
