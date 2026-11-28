@@ -256,3 +256,23 @@ def test_ctrl_c_exits_gracefully(monkeypatch, capsys):
     assert code == 130
     assert "interrupted" in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_command_plugin_dispatch(monkeypatch, capsys):
+    reg = pf.Registry()
+
+    @reg.register("command", name="hello")
+    def hello(argv):
+        print("hello", argv)
+        return 7
+
+    monkeypatch.setattr(cli.plugin_framework, "load_plugins", lambda: reg)
+    assert cli.main(["hello", "x"]) == 7
+    assert "hello ['x']" in capsys.readouterr().out
+
+
+def test_missing_command_plugin_reports_clearly(monkeypatch, capsys):
+    empty = pf.Registry()
+    monkeypatch.setattr(cli.plugin_framework, "load_plugins", lambda: empty)
+    assert cli.main(["web", "--port", "0"]) == 2
+    assert "unknown command" in capsys.readouterr().err

@@ -30,6 +30,42 @@ python3 -m venv .venv
 
 ## Usage
 
+### Common commands
+
+```bash
+# pre-flight and provider setup
+dmesg-agent check
+dmesg-agent config providers
+dmesg-agent config use local --base-url http://127.0.0.1:8000
+dmesg-agent config use deepseek                  # export DEEPSEEK_API_KEY first
+
+# offline analysis (file mode: no live collection)
+dmesg-agent --file dmesg.txt --kernel 6.12.11 --distro "Debian 13" -o report.md
+dmesg-agent --file sosreport-*.tar.xz --issue jira.txt --host-id JIRA-1234 \
+  -o report.md --html report.html
+dmesg-agent --file nvidia-bug-report.log.gz --host-id JIRA-1234 -o report.md
+dmesg-agent --file journal-export.json -o report.md
+
+# live diagnosis (full pipeline)
+sudo dmesg-agent
+dmesg-agent --boot previous
+dmesg-agent --ssh user@10.0.0.5 --key ~/.ssh/id_ed25519
+
+# web UI (command plugin)
+dmesg-agent web --port 8790 --open
+
+# evaluation / maintenance
+dmesg-agent eval
+dmesg-agent eval --live --provider local
+dmesg-agent score --no-tests
+dmesg-agent plugins list
+dmesg-agent cases list
+```
+
+Every command supports `--help`; the complete option and subcommand reference follows the examples.
+
+### More examples
+
 ```bash
 # 1) Analyze an offline log (no executor: no prefetch, no deep verification)
 dmesg-agent --file dmesg.txt --kernel 6.12.11+ --distro "Debian 13" -o report.md
@@ -57,16 +93,17 @@ Offline packages are unpacked in memory (nothing is extracted to disk) and reduc
 
 When deep verification hits a collection command that needs root: it asks for the password via hidden terminal input; with no terminal but a desktop session available it falls back to a `zenity`/`kdialog` password dialog; `--askpass none` disables this (those commands are skipped). The password is kept in process memory only.
 
-Common options: `--no-deep` (skip deep verification), `--no-prefetch`, `--max-verify N`, `--deep-rounds N`, `--no-triage`, `--json`, `--askpass auto|terminal|gui|none`, `--max-tokens`.
+Common pipeline switches: `--no-deep`, `--no-prefetch`, `--max-verify N`, `--deep-rounds N`, `--no-triage`, `--json`, `--askpass`, `--max-tokens`; full reference below.
 
-### Option reference
+### Complete option reference
 
 Data source (mutually exclusive; neither = collect from the local machine):
 
 | Option | Meaning |
 |---|---|
 | `--ssh USER@HOST` | collect and diagnose a remote machine over SSH |
-| `--file PATH` | analyze an offline log (`.gz` supported, `-` = stdin; no executor → no scan/prefetch/deep verification) |
+| `--file PATH` | analyze an offline log: plain dmesg/kern.log (`.gz`, `-` = stdin), `journalctl -o json`/`-o export`, `nvidia-bug-report.log[.gz]`, or a sosreport tar (`.tar`/`.tar.gz`/`.tar.xz`); no executor → no live scan/prefetch/deep |
+| `--issue PATH` | reporter's problem description (Jira body etc.), injected as untrusted context (never evidence, never instructions); works with any source |
 
 Collection & authentication:
 
@@ -127,17 +164,70 @@ LLM backend & output:
 | `-v` | stage-by-stage progress (stderr), including live model streaming |
 | `--version` | print version |
 
-Subcommands:
+### Complete subcommand reference
 
-| Command | Meaning |
-|---|---|
-| `dmesg-agent config show\|set <k> <v>\|unset <k>` | manage `~/.config/dmesg-agent/config.json`; keys `base_url` / `model` / `api_key` / `max_tokens` / `timeout` |
-| `dmesg-agent check` (or `config check`) | pre-flight readiness: print every config item with its source, probe `/v1/models`, list what still needs configuring, and show the committed weekly software score (exit 1 if not ready) |
-| `dmesg-agent eval [--live] [--ab] [--json] [--min-locate F]` | run the evaluation harness (see below) |
-| `dmesg-agent cases list\|show\|confirm\|dismiss\|fixed` | inspect and manage the per-host case library |
-| `dmesg-agent score [--record] [--live] [--note TEXT]` | compute the weekly software scorecard; `--record` writes `dmesg_agent/scorecards/<week>.json` + `SCORECARD.md` |
+`config` — persistent settings (`~/.config/dmesg-agent/config.json`, mode 0600):
 
-Environment variables: `DMESG_AGENT_PROVIDER`, `DMESG_AGENT_BASE_URL`, `DMESG_AGENT_MODEL`, `DMESG_AGENT_API_KEY`, `DMESG_AGENT_EXTRA_BODY` (JSON object merged into the request body), `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` (fallback), `ANTHROPIC_BASE_URL` (Anthropic provider only), `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `OPENROUTER_API_KEY`, `DMESG_AGENT_SSH_PASSWORD`, `DMESG_AGENT_KERNEL_SRC`, `DMESG_AGENT_VMLINUX`, `DMESG_AGENT_KNOWLEDGE_DB`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` (case-library location; falls back to state/cache/temp when unwritable). Config precedence everywhere: CLI flag > env var > config file > provider preset > default.
+```bash
+dmesg-agent config show
+dmesg-agent config providers
+dmesg-agent config use <provider> [--base-url URL] [--model NAME] [--api-key KEY]
+dmesg-agent config set <key> <value>
+dmesg-agent config unset <key>
+dmesg-agent config check
+```
+
+Keys: `provider`, `base_url`, `model`, `api_key`, `api_style`, `chat_path`,
+`models_path`, `max_tokens`, `timeout`, `temperature`, `extra_body`.
+
+`check` — pre-flight readiness (exit 1 if not ready):
+
+```bash
+dmesg-agent check [--provider NAME] [--base-url URL] [--model NAME] [--api-key KEY]
+```
+
+`eval` — known-answer harness:
+
+```bash
+dmesg-agent eval [--live] [--provider NAME] [--base-url URL] [--model NAME]
+                 [--api-key KEY] [--json] [--min-locate F] [--ab]
+```
+
+`cases` — per-host case library (`STATUS` = candidate/confirmed/dismissed/fixed):
+
+```bash
+dmesg-agent cases [--db PATH] list [--host H] [--status STATUS] [--limit N]
+dmesg-agent cases [--db PATH] show <ID>
+dmesg-agent cases [--db PATH] confirm|dismiss|fixed <ID>
+```
+
+`score` — weekly software scorecard:
+
+```bash
+dmesg-agent score [--record] [--live] [--note TEXT] [--no-tests]
+                  [--base-url URL] [--model NAME] [--api-key KEY] [--json]
+```
+
+`plugins` — plugin inventory:
+
+```bash
+dmesg-agent plugins list
+```
+
+Disable at startup: `DMESG_AGENT_DISABLE_PLUGINS=<module>,...` (module names,
+e.g. `collect_facts,web`).
+
+`web` — local web UI (command plugin; see `docs/WEB.md`):
+
+```bash
+dmesg-agent web [--host 127.0.0.1] [--port 8790] [--token TOKEN]
+                [--job-root PATH] [--open | --no-open]
+```
+
+Non-loopback `--host` auto-generates an access token. Every subcommand
+supports `--help`.
+
+Environment variables: `DMESG_AGENT_PROVIDER`, `DMESG_AGENT_BASE_URL`, `DMESG_AGENT_MODEL`, `DMESG_AGENT_API_KEY`, `DMESG_AGENT_EXTRA_BODY` (JSON object merged into the request body), `DMESG_AGENT_DISABLE_PLUGINS` (comma-separated plugin module names), `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` (fallback), `ANTHROPIC_BASE_URL` (Anthropic provider only), `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `OPENROUTER_API_KEY`, `DMESG_AGENT_SSH_PASSWORD`, `DMESG_AGENT_KERNEL_SRC`, `DMESG_AGENT_VMLINUX`, `DMESG_AGENT_KNOWLEDGE_DB`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` (case library/archive; falls back to `XDG_STATE_HOME`, cache, then a per-UID temp dir when unwritable), `XDG_STATE_HOME`, `NO_COLOR`. Config precedence everywhere: CLI flag > env var > config file > provider preset > default.
 
 Always on, no flag: model output streams live to stderr; confirmed findings are fingerprinted into the per-host case library and re-appear as "🔁 Recurrence" annotations; the host's prior cases and last run summary are injected into the prompt as non-evidence context; every run is archived under `$XDG_DATA_HOME/dmesg-agent/runs/` (gzip JSON, mode 0600, newest 200 kept) with the full LLM request/response exchanges, triage blocks, collected context and final result — the replay/audit trail that makes a diagnosis debuggable.
 
@@ -329,9 +419,10 @@ default.
 ## Plugin architecture
 
 The core is a dispatcher; features are plugins under `dmesg_agent/plugins/`
-(six hook kinds: source, collect, context, deep, post, render). Removing a
-plugin file — or disabling one — removes that enhancement without breaking the
-core report; evidence verification and the command whitelist stay in the core.
+(seven hook kinds: source, collect, context, deep, post, render, command).
+Removing a plugin file — or disabling one — removes that enhancement without
+breaking the core report; evidence verification and the command whitelist stay
+in the core. The `command` hook is how `dmesg-agent web` is provided.
 
 ```bash
 dmesg-agent plugins list                                   # what is loaded, where
@@ -340,6 +431,28 @@ DMESG_AGENT_DISABLE_PLUGINS=collect_facts dmesg-agent ...  # one-off disable (mo
 
 `docs/PLUGINS.md` has the hook contracts, the degradation matrix and the
 step-by-step "add a plugin without touching the core" guide.
+
+## Web UI (plugin)
+
+```bash
+dmesg-agent check
+dmesg-agent web --port 8790 --open
+```
+
+Upload a log/package plus the reporter's description; the CLI runs as a
+background job (offline pipeline), and the page shows stage/log progress,
+the verdict/findings, evidence verification, and downloads for Markdown, HTML
+and the run archive. Cancel is graceful (SIGINT). History survives a server
+restart. No extra dependencies; binds to 127.0.0.1 by default, and a
+non-loopback bind auto-generates an access token.
+
+Options: `--open` opens a browser (default), `--no-open` for headless servers,
+`--host 0.0.0.0` to listen remotely (token auto-generated), `--token` to set
+one, `--job-root PATH` to relocate job storage, `--port N` (0 = auto). See
+`docs/WEB.md` for the HTTP API and security notes.
+
+It is a `command` plugin: `DMESG_AGENT_DISABLE_PLUGINS=web` (or deleting
+`dmesg_agent/plugins/web/`) removes it without touching the CLI.
 
 ## Development
 

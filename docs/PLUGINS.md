@@ -31,12 +31,17 @@ Every plugin function carries `@register(kind, ...)` from
 | `deep` | `fn(ctx) -> None` | per-concern collection + verdict after the first pass; set `ctx.result`/`ctx.corpus`/`ctx.deep_used` |
 | `post` | `fn(ctx) -> None` | result post-processing (`ctx.result["knowledge"]`, `ctx.archive_path`) |
 | `render` | `fn(ctx) -> str \| None` | alternate output; named `brief` / `html` |
+| `command` | `fn(argv) -> int` | register a CLI subcommand (e.g. `dmesg-agent web`); argv is everything after the command name |
 
 Collect and context hooks run in ascending `order`. Source/depth/render use the
-first matching plugin. Runtime isolation: a plugin raising `CollectError` aborts
-the run with exit 2 (a real data/input error); **any other exception is caught
-per plugin**, printed as “plugin <name> failed (…); continuing”, and the stage
-is skipped. A broken plugin degrades the report, never the core.
+first matching plugin; a command plugin is selected by `argv[0]`, with built-in
+subcommands (`config`, `check`, `eval`, `cases`, `score`, `plugins`) taking
+priority. Runtime isolation: a plugin raising `CollectError` aborts the run with
+exit 2 (a real data/input error); **any other exception is caught per plugin**,
+printed as “plugin <name> failed (…); continuing”, and the stage is skipped. A
+broken plugin degrades the report, never the core. Command plugins own their
+process; errors there are theirs (the CLI gives a clear “unknown command” when a
+command plugin is disabled/missing).
 
 ## The shared context
 
@@ -66,6 +71,19 @@ def my_collector(ctx) -> None:
 3. Add a test under `tests/` and run `pytest tests/ -q`.
 4. `dmesg-agent plugins list` must show it; the CLI needs **no change**.
 
+A command plugin looks the same but owns a subcommand:
+
+```python
+@register("command", order=10, description="my subcommand")
+def mycmd(argv: list[str]) -> int:
+    args = my_parser().parse_args(argv)   # your own argparse
+    ...
+    return 0
+```
+
+`dmesg-agent mycmd ...` dispatches to it; built-in subcommands win on name
+clashes. `plugins/web/` is the reference implementation.
+
 Helpers live in `plugins/_util.py` (underscore-prefixed modules are not
 discovered). List plugins with `dmesg-agent plugins list`.
 
@@ -88,6 +106,7 @@ The core degrades explicitly and visibly:
 | `post_knowledge` | no case library update |
 | `post_archive` | no run archive |
 | `render_brief` / `render_html` | `--brief` falls back to the full Markdown report; `--html` warns and is skipped |
+| `web` (command) | `dmesg-agent web` reports “unknown command … plugin disabled or missing”; the CLI is unchanged |
 
 `tests/test_plugins.py::test_core_runs_with_empty_registry` proves the core
 still emits a report when the registry is empty.
@@ -113,3 +132,4 @@ still emits a report when the registry is empty.
 | deep | `deep` (playbooks, multi-round) |
 | post | `knowledge`, `archive` |
 | render | `brief`, `html` |
+| command | `web` (local HTTP UI; see `docs/WEB.md`) |

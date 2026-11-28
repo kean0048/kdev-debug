@@ -501,6 +501,15 @@ def _run_cli(argv: list[str] | None = None) -> int:
         return score_main(argv[1:])
     if argv and argv[0] == "plugins":
         return _plugins_main(argv[1:])
+    if argv and argv[0] not in {"config", "check", "eval", "cases", "score", "plugins"} \
+            and not argv[0].startswith("-"):
+        registry = plugin_framework.load_plugins()
+        command = registry.named("command", argv[0])
+        if command is not None:
+            return command(argv[1:])
+        print(f"error: unknown command {argv[0]!r} — a command plugin may be "
+              f"disabled or missing (see `dmesg-agent plugins list`)", file=sys.stderr)
+        return 2
 
     args = build_parser().parse_args(argv)
     registry = plugin_framework.load_plugins()

@@ -18,6 +18,7 @@ dmesg-agent --ssh user@host --key ~/.ssh/id_ed25519          # remote
 .venv/bin/dmesg-agent score --no-tests                        # computed scorecard (no write)
 .venv/bin/dmesg-agent score --live --record --note "why"     # weekly card into the repo
 .venv/bin/dmesg-agent plugins list                            # loaded plugins / kinds / errors
+dmesg-agent web --port 8790 --no-open                         # web UI (command plugin)
 DMESG_AGENT_DISABLE_PLUGINS=collect_facts dmesg-agent --file dmesg.txt   # one-off disable
 ```
 
@@ -45,7 +46,7 @@ Optional evidence sources joined into the same corpus/prompt (all in `systemscan
 
 Key modules and the invariants that tie them together:
 
-- **`plugins/`** — registry (`Registry`, `RunContext`, `@register`) + directory discovery. Six optional hook kinds: `source`, `collect`, `context`, `deep`, `post`, `render`. A broken plugin is a warning, not a crash; `DMESG_AGENT_DISABLE_PLUGINS=<module names>` or deleting a module removes the feature. Core-only operation is tested (`tests/test_plugins.py`). `plugins list` prints the inventory and load errors.
+- **`plugins/`** — registry (`Registry`, `RunContext`, `@register`) + directory discovery. Seven optional hook kinds: `source`, `collect`, `context`, `deep`, `post`, `render`, `command`. A broken plugin is a warning, not a crash; `DMESG_AGENT_DISABLE_PLUGINS=<module names>` or deleting a module removes the feature. Core-only operation is tested (`tests/test_plugins.py`). `plugins list` prints the inventory and load errors. `plugins/web/` is the `command` plugin behind `dmesg-agent web`: stdlib HTTP UI, background `python -m dmesg_agent.cli` subprocess, job dirs + per-job archive, shared case DB, token for non-loopback binds (`docs/WEB.md`).
 - **`collectors/`** — all data sources produce a `RawBundle` (`collectors/base.py`). `local.py`/`filelog.py` are the sources; `collect_via(executor)` runs the shared command ladder over any `Executor`. `collectors/packages.py` imports offline diagnostic dumps (sosreport tar.xz, `journalctl -o json`/`-o export`, `nvidia-bug-report.log.gz`) in memory into the same shape: a main kernel log for triage plus `extra_sources` that join the prompt/evidence corpus like a system scan; the `source_offline_packages` plugin wires this into `--file`.
 - **`executors.py`** — `LocalExecutor` / `SSHExecutor` behind one `run(cmd, sudo=, timeout=)` interface. `--file` mode passes `executor=None`, which disables prefetch and deep verification entirely. Both executors probe passwordless sudo once (`sudo -n true`) and only prompt when truly needed; `--askpass none` skips privileged commands. `LocalExecutor.parallel_safe=True` enables concurrent collection; SSH stays serial (paramiko client is not thread-safe). Password lives in process memory only.
 - **`triage.py`** — regex error signatures slice the log into suspect `Block`s; block names feed prefetch routing. The `oom` signature deliberately requires `Out of memory: Killed process` / `oom-kill` — bare "Out of memory" also appears in driver errors (NVRM `NV_ERR_NO_MEMORY`) and is routed to `gpu-nvidia` instead. `--no-triage` sends the whole log.

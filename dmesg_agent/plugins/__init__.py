@@ -8,6 +8,7 @@ Six hook kinds, all optional:
     deep     fn(ctx) -> None        per-concern collection AFTER the first pass
     post     fn(ctx) -> None        result post-processing (case library, archive)
     render   fn(ctx) -> str | None  alternate output (brief text, HTML file)
+    command  fn(argv) -> int        register a CLI subcommand (e.g. `web`)
 
 A plugin is a module under this package whose functions carry @register(...).
 Dropping a module (or disabling it with DMESG_AGENT_DISABLE_PLUGINS) removes the
@@ -27,7 +28,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-KINDS = ("source", "collect", "context", "deep", "post", "render")
+KINDS = ("source", "collect", "context", "deep", "post", "render", "command")
 
 
 @dataclass
