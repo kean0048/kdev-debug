@@ -550,7 +550,9 @@ extracting pending records, so coverage and fix records accumulate.
 
 The same catalog runs on a schedule in GitHub Actions
 (`.github/workflows/known-issues.yml`); the rebuilt SQLite store is uploaded
-as a workflow artifact for local use with `--known-issues-db`.
+as a workflow artifact for local use with `--known-issues-db`. CI has no LLM
+credentials, so its artifact carries the issue/fingerprint index; run
+`learn --auto --extract` locally to fill root causes and fix commits.
 
 ## Development
 
