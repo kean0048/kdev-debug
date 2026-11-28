@@ -524,7 +524,11 @@ fingerprint > same fault class > same subsystem > token similarity) and
 injects up to four records into the analysis prompt, explicitly marked as
 external reports — never as evidence. Select a store with
 `--known-issues-db` / `DMESG_AGENT_KNOWN_ISSUES_DB`; disable with
-`--no-known-issues`.
+`--no-known-issues`. The report's **Appendix: community known-issue recall**
+lists every injected match (match reason, source segment, upstream link) and
+the model's `known_issue_usage` verdict (applied / considered / rejected);
+zero matches — or a missing store — are stated explicitly, so you can tell
+whether the community store influenced a diagnosis.
 
 The ingest sources run on a schedule in GitHub Actions
 (`.github/workflows/known-issues.yml`); the rebuilt SQLite store is uploaded

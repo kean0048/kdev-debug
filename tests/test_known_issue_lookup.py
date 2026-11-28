@@ -51,13 +51,58 @@ def test_known_issue_lookup_injects_matches(tmp_path):
 
 def test_known_issue_lookup_noop_without_store_or_when_disabled(tmp_path):
     from dmesg_agent.plugins.context_known_issues import known_issues
-    known_issues(_ctx(tmp_path / "missing.db"))
+    missing = _ctx(tmp_path / "missing.db")
+    known_issues(missing)
+    assert missing.known_issues_text == ""
+    assert missing.known_issues_meta["status"] == "no-store"
     db = _store_with_issue(tmp_path)
     ctx = _ctx(db, args=SimpleNamespace(known_issues_db=str(db),
                                         no_known_issues=True))
     known_issues(ctx)
     assert ctx.known_issues_text == ""
     assert ctx.known_issues == []
+    assert ctx.known_issues_meta["status"] == "disabled"
+
+
+def test_recall_classifies_each_block_separately(tmp_path):
+    from dmesg_agent.plugins.context_known_issues import known_issues
+    line = ("[    7.810218] iwlwifi 0000:09:00.0: Direct firmware load for "
+            "iwlwifi-gl-c0-fm-c0-c102.ucode failed with error -2")
+    db = tmp_path / "ki.db"
+    store = KnownIssueStore(db)
+    store.upsert(source="lore", source_id="iw1", url="https://lore/iw",
+                 title="iwlwifi BE200: linux-firmware lacks the ucode",
+                 classification=classify_text("", line),
+                 root_cause="linux-firmware package is too old")
+    store.close()
+    lines = ["[    2.644343] ACPI: thermal: Thermal Zone [THM0] (65 C)", line]
+    ctx = SimpleNamespace(
+        args=SimpleNamespace(known_issues_db=str(db), no_known_issues=False),
+        blocks=[SimpleNamespace(start=1, end=1, names=["thermal"]),
+                SimpleNamespace(start=2, end=2, names=["firmware"])],
+        lines=lines, known_issues_text="", known_issues=[],
+        known_issues_meta={}, log=lambda *a: None)
+    known_issues(ctx)
+    assert ctx.known_issues, "the firmware block must still be matched"
+    top = ctx.known_issues[0]
+    assert top["block"] == "L2-2"
+    assert top["fault_class"] == "firmware"
+
+
+def test_post_attaches_recall_trace_and_model_usage():
+    from dmesg_agent.plugins.context_known_issues import known_issues_trace
+    ctx = SimpleNamespace(
+        result={"known_issue_usage": [
+            {"id": 1, "used": "rejected", "why": "target mode, not host nvme"}]},
+        known_issues_meta={"status": "matched", "store": "db",
+                           "matches": [{"id": 1}]})
+    known_issues_trace(ctx)
+    trace = ctx.result["known_issues"]
+    assert trace["usage"][0]["used"] == "rejected"
+    disabled = SimpleNamespace(result={},
+                               known_issues_meta={"status": "disabled"})
+    known_issues_trace(disabled)
+    assert "known_issues" not in disabled.result
 
 
 def test_known_issues_prompt_block_is_marked_not_evidence():
@@ -67,6 +112,7 @@ def test_known_issues_prompt_block_is_marked_not_evidence():
     assert "Known issues from the community knowledge base" in user
     assert "NOT evidence from this host" in user
     assert "- #1 [storage/nvme] example" in user
+    assert "known_issue_usage" in user
 
 
 def test_known_issues_plugin_registered_and_flags_parse():

@@ -164,6 +164,57 @@ def _timeline(blocks: list[Block], lines: list[str]) -> str:
     return f"<h2>Timeline of suspicious segments</h2><ol class='timeline'>{''.join(items)}{more}</ol>"
 
 
+def _known_issues_details(result: dict) -> str:
+    ki = result.get("known_issues")
+    if not isinstance(ki, dict) or ki.get("status") == "disabled":
+        return ""
+    status = str(ki.get("status", ""))
+    store = _e(ki.get("store", "?"))
+    if status == "no-store":
+        body = (f"<p>Store <code>{store}</code> not found — recall did not run; "
+                f"build it with <code>dmesg-agent learn ...</code>.</p>")
+    elif status == "error":
+        body = f"<p>Recall failed: {_e(ki.get('error', '?'))}.</p>"
+    elif status != "matched":
+        body = (f"<p>Store <code>{store}</code> "
+                f"({_e(ki.get('store_total', '?'))} issues) — <b>0 matches</b>; "
+                f"the community store did not influence this diagnosis.</p>")
+    else:
+        matches = [m for m in (ki.get("matches") or []) if isinstance(m, dict)]
+        if not matches:
+            return ""
+        usage = {str(u.get("id")): u for u in (ki.get("usage") or [])
+                 if isinstance(u, dict)}
+        rows = []
+        for m in matches:
+            u = usage.get(str(m.get("id")))
+            model = (f"{_e(u.get('used', '?'))} — "
+                     f"{_e(_trim(u.get('why', ''), 90))}" if u else "not reported")
+            ref = ""
+            urls = m.get("urls") or []
+            url = str(urls[0]) if urls else ""
+            if url.startswith(("http://", "https://")) and \
+                    not any(c in url for c in " <>\n\t"):
+                ref = f'<a href="{_e(url)}">link</a>'
+            rows.append(
+                f"<tr><td>{_e(m.get('id', '?'))}</td>"
+                f"<td>{_e(m.get('subsystem', '?'))}/"
+                f"{_e(m.get('fault_class', '?'))}</td>"
+                f"<td>{_e(_trim(m.get('title', ''), 90))}</td>"
+                f"<td>{_e(_trim(m.get('match', ''), 80))}</td>"
+                f"<td>{_e(m.get('block', ''))}</td><td>{model}</td>"
+                f"<td>{ref}</td></tr>")
+        body = (f"<p>Store <code>{store}</code> "
+                f"({_e(ki.get('store_total', '?'))} issues) — "
+                f"<b>{len(matches)} match(es)</b> injected into the analysis "
+                f"prompt.</p><table><thead><tr><th>#</th><th>Class</th>"
+                f"<th>Title</th><th>Why it matched</th><th>Segment</th>"
+                f"<th>Model usage</th><th>Ref</th></tr></thead>"
+                f"<tbody>{''.join(rows)}</tbody></table>")
+    return ("<details><summary>Appendix: community known-issue recall "
+            "(external, not evidence)</summary>" + body + "</details>")
+
+
 def _deep_details(result: dict) -> str:
     sections = []
     for c in (result.get("inconclusive_concerns") or []) + (result.get("findings") or []) \
@@ -298,6 +349,8 @@ def render_html(result: dict | None, bundle: RawBundle, summary: VerifySummary,
         out.append("<details open><summary>Appendix: deterministic facts "
                    "(rule-extracted)</summary><table><thead><tr><th>Kind</th><th>Key</th>"
                    f"<th>Value</th></tr></thead><tbody>{rows}</tbody></table></details>")
+
+    out.append(_known_issues_details(result))
 
     if changes_text:
         out.append("<details><summary>Appendix: system changes around the fault</summary>"

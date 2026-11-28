@@ -71,6 +71,7 @@ class RunContext:
     history_text: str = ""
     known_issues_text: str = ""
     known_issues: list[dict] = field(default_factory=list)
+    known_issues_meta: dict = field(default_factory=dict)
     facts: list[dict] = field(default_factory=list)
     facts_text: str = ""
 

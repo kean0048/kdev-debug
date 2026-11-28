@@ -381,8 +381,10 @@ class KnownIssueStore:
         Jaccard similarity adds a graded signal. Subsystem-only matches are
         dropped — too weak to present as a known issue.
         """
+        # Generic triage buckets (warning/fault/driver/…) are not a real
+        # similarity signal; matching on them would inject unrelated issues.
         q_classes = {str(x) for x in (fault_classes or ())
-                     if x and x != "unclassified"}
+                     if x and x not in _GENERIC_CLASSES}
         q_subs = {str(x) for x in (subsystems or ())
                   if x and x != "unclassified"}
         q_tokens = {str(t).lower() for t in (tokens or ()) if t}

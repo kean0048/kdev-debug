@@ -397,6 +397,17 @@ def test_search_ranks_exact_fingerprint_before_same_class(tmp_path):
     assert "same fault class" in hits[1]["match"]
 
 
+def test_search_ignores_generic_fault_classes(tmp_path):
+    store = KnownIssueStore(tmp_path / "ki.db")
+    c = classify_text("i8042 keylock",
+                      "[2.668332] i8042: Warning: Keylock active")
+    assert c.fault_class == "warning"
+    store.upsert(source="lore", source_id="m1", url="u", title="keylock",
+                 classification=c)
+    # "warning" is a generic triage bucket, not a similarity signal
+    assert store.search(fault_classes=["warning"]) == []
+
+
 def test_search_ignores_unrelated_issues(tmp_path):
     store = KnownIssueStore(tmp_path / "ki.db")
     oom = classify_text("oom", "[1.0] Out of memory: Killed process 1 (x)")

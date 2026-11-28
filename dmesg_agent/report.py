@@ -328,6 +328,8 @@ def render(result: dict | None, bundle: RawBundle, summary: VerifySummary,
                        f"{_esc(str(f.get('value', '')))}{loc}")
         out.append("")
 
+    _known_issues_appendix(out, result)
+
     if changes_text:
         out.append("## Appendix: system changes around the fault\n")
         out.append("> Rebooting, installing a kernel/package, suspending or remounting right "
@@ -415,6 +417,58 @@ def apply_ansi(text: str) -> str:
     for needle, code in _ANSI.items():
         text = text.replace(needle, f"{code}{needle}\x1b[0m")
     return re.sub(r"(?m)^(#{1,3} .*)$", "\x1b[1m\\g<1>\x1b[0m", text)
+
+
+def _known_issues_appendix(out: list[str], result: dict) -> None:
+    """Show what community recall did — including "nothing" — and whether the
+    model declared any match as applied/considered/rejected."""
+    ki = result.get("known_issues")
+    if not isinstance(ki, dict) or ki.get("status") == "disabled":
+        return
+    status = str(ki.get("status", ""))
+    store = f"`{_esc(ki.get('store', '?'))}`"
+    out.append("## Appendix: community known-issue recall\n")
+    out.append("> External upstream reports/patches from the community store — "
+               "context only, never evidence from this host.\n")
+    if status == "no-store":
+        out.append(f"- Store: {store} (not found) — recall did not run; build it "
+                   f"with `dmesg-agent learn ...`.\n")
+        return
+    if status == "error":
+        out.append(f"- Recall failed: {_esc(ki.get('error', '?'))}.\n")
+        return
+    total = ki.get("store_total", "?")
+    if status != "matched":
+        out.append(f"- Store: {store} ({total} issue(s)) — **0 matches** for the "
+                   f"selected log segments; the community store did not influence "
+                   f"this diagnosis.\n")
+        return
+    matches = [m for m in (ki.get("matches") or []) if isinstance(m, dict)]
+    if not matches:
+        return
+    usage = {str(u.get("id")): u for u in (ki.get("usage") or [])
+             if isinstance(u, dict)}
+    out.append(f"- Store: {store} ({total} issue(s)) — **{len(matches)} match(es)** "
+               f"injected into the analysis prompt.")
+    out.append("")
+    out.append("| # | Class | Title | Why it matched | Segment | Model usage | Ref |")
+    out.append("|---|---|---|---|---|---|---|")
+    for m in matches:
+        u = usage.get(str(m.get("id")))
+        if u:
+            model = f"{_esc(u.get('used', '?'))} — {_esc(_short(u.get('why', ''), 90))}"
+        else:
+            model = "not reported"
+        urls = m.get("urls") or []
+        url = str(urls[0]) if urls else ""
+        ref = (f"[link]({url})" if url.startswith(("http://", "https://"))
+               and not any(c in url for c in " <>\n\t|") else "")
+        out.append(
+            f"| {m.get('id', '?')} | {_esc(m.get('subsystem', '?'))}/"
+            f"{_esc(m.get('fault_class', '?'))} | {_esc(_short(m.get('title', ''), 90))} "
+            f"| {_esc(_short(m.get('match', ''), 80))} "
+            f"| {_esc(m.get('block', ''))} | {model} | {ref} |")
+    out.append("")
 
 
 def _deep_appendix(out: list[str], result: dict) -> None:

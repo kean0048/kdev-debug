@@ -159,6 +159,15 @@ The `known_issues` context plugin runs after triage in every diagnosis
    The model may use them to sharpen root cause/next steps, but every
    `evidence.quote` must still come from this host's log or collected output.
 
+Each suspicious segment is classified separately, so a firmware block cannot
+be lost behind an earlier thermal signal, and generic buckets
+(`warning`/`fault`/`driver`) never count as a similarity class. The model is
+asked to declare `known_issue_usage` per injected id (`applied` / `considered`
+/ `rejected` + why); the report's **Appendix: community known-issue recall**
+shows those declarations next to the match reason, source segment and upstream
+link. Zero matches and a missing store are reported explicitly, so "the
+community store made no difference here" is visible instead of implied.
+
 Flags: `--known-issues-db PATH` (or `DMESG_AGENT_KNOWN_ISSUES_DB`) and
 `--no-known-issues`. With no store present the plugin is a no-op, so a fresh
 install behaves exactly as before.

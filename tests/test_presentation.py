@@ -109,6 +109,36 @@ def test_render_includes_deterministic_facts():
     assert "deterministic facts" in html and "killed 2" in html
 
 
+def test_render_includes_known_issue_recall_trace():
+    r = _result(_finding("iwlwifi firmware missing", "high"))
+    r["known_issues"] = {
+        "status": "matched", "store": "/tmp/ki.db", "store_total": 189,
+        "matches": [{"id": 7, "subsystem": "network", "fault_class": "firmware",
+                     "title": "iwlwifi BE200 requires newer linux-firmware",
+                     "match": "same fault class (firmware)", "block": "L6-17",
+                     "urls": ["https://lore.kernel.org/all/x/"]}],
+        "usage": [{"id": 7, "used": "applied",
+                   "why": "named the missing ucode"}],
+    }
+    report = render(r, RawBundle(dmesg_text=""), VerifySummary(),
+                    [Block(1, 1, ["firmware"])])
+    assert "community known-issue recall" in report
+    assert "iwlwifi BE200" in report and "applied" in report and "L6-17" in report
+    assert "never evidence" in report
+    html = render_html(r, RawBundle(dmesg_text=""), VerifySummary(),
+                       [Block(1, 1, ["firmware"])], ["[1.0] x"])
+    assert "community known-issue recall" in html and "iwlwifi BE200" in html
+
+
+def test_render_known_issue_zero_matches_is_explicit():
+    r = _result(_finding("iwlwifi firmware missing", "high"))
+    r["known_issues"] = {"status": "no-match", "store": "/tmp/ki.db",
+                         "store_total": 189}
+    report = render(r, RawBundle(dmesg_text=""), VerifySummary(),
+                    [Block(1, 1, ["firmware"])])
+    assert "0 matches" in report and "did not influence" in report
+
+
 def test_verdict_shows_fast_path_chip():
     r = _result(_finding("oom", "high"))
     r["knowledge"] = {"fast_path": {"case_id": 3, "score": 0.9}}

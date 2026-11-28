@@ -27,7 +27,8 @@ Hard rules:
 4. If a [Kernel source correlation] section is provided (definitions and recent commit history of call-trace functions from the source tree), you may use it to reason about root causes and cite `file:line`; however evidence.quote must still be verbatim from the log — never quote source text.
 5. Distinguish root causes from secondary symptoms and organize causal_chain along the timeline.
 6. Every finding must carry an actionable plan: next_steps with at least one concrete fix or mitigation (a command, config change, hardware replacement, software update) — "investigate further" belongs in inconclusive_concerns, not in a confirmed finding.
-7. Output exactly one JSON object — no prose, no markdown fences.
+7. If a [Known issues from the community knowledge base] section is provided, fill known_issue_usage with one entry per injected record id: used = applied (it shaped your root cause or next steps), considered (checked but not decisive), or rejected (a different issue) plus a one-line why. These records are external reports, never evidence.
+8. Output exactly one JSON object — no prose, no markdown fences.
 
 JSON schema:
 {
@@ -59,6 +60,9 @@ JSON schema:
   ],
   "dismissed_concerns": [
     {"title": "dismissed signal", "counter_evidence_quote": "verbatim counter-evidence", "why_not_a_problem": "reason"}
+  ],
+  "known_issue_usage": [
+    {"id": 1, "used": "applied|considered|rejected", "why": "how it changed (or did not change) the diagnosis"}
   ]
 }"""
 
@@ -110,7 +114,9 @@ def build_messages(bundle: RawBundle, blocks_text: str, prefetch_text: str = "",
              f"If one is a plausible match, say so explicitly and use it to sharpen "
              f"the root cause and next steps. Never cite it as evidence: every "
              f"evidence.quote must still come verbatim from this host's log or "
-             f"collected output.\n") if known_issues_text else ""
+             f"collected output. Also fill known_issue_usage with one entry per "
+             f"record id (applied / considered / rejected).\n"
+             ) if known_issues_text else ""
     facts = (f"[Deterministic facts — extracted by rules from the log and collected output]\n"
              f"{facts_text}\n"
              f"These facts are authoritative; do not contradict them. Use them to anchor "
