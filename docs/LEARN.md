@@ -190,8 +190,9 @@ The `known_issues` context plugin runs after triage in every diagnosis
 1. classifies the selected log blocks with `classify_text` (the same rules as
    ingest);
 2. calls `KnownIssueStore.search()` — exact fingerprint 100, same fault class
-   40, same subsystem 10, token Jaccard ≥ 0.25 adds up to 50; subsystem-only
-   matches are dropped as too weak;
+   20, same subsystem 5, token Jaccard ≥ 0.20 adds up to 60 (similarity can
+   outrank a class-only match, e.g. the same missing-firmware symptom on a
+   neighbouring device); subsystem-only matches are dropped as too weak;
 3. injects up to four records (title, known cause, fix, first URL) into the
    analysis prompt, explicitly marked **external reports — not evidence**.
    The model may use them to sharpen root cause/next steps, but every

@@ -529,9 +529,10 @@ generic signature. Patch-series versions (v1/v2/v3 + `Re:`) and cross-source
 duplicates merge into one record with multiple URLs. See `docs/LEARN.md`.
 
 **Diagnosis-time recall** (stage 4): the `known_issues` context plugin
-classifies the selected log blocks with the same rules, ranks matches (exact
-fingerprint > same fault class > same subsystem > token similarity) and
-injects up to four records into the analysis prompt, explicitly marked as
+classifies each selected log block with the same rules, ranks matches (exact
+fingerprint dominates; token similarity and same specific fault class rank
+next; subsystem-only matches are dropped) and injects up to four records into
+the analysis prompt, explicitly marked as
 external reports — never as evidence. Select a store with
 `--known-issues-db` / `DMESG_AGENT_KNOWN_ISSUES_DB`; disable with
 `--no-known-issues`. The report's **Appendix: community known-issue recall**

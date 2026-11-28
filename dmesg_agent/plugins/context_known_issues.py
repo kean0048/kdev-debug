@@ -46,7 +46,8 @@ def known_issues(ctx) -> None:
                 for match in store.search(
                         fingerprint=cls.fingerprint,
                         fault_classes=cls.fault_classes,
-                        subsystems=cls.subsystems, tokens=cls.tokens, limit=2):
+                        subsystems=cls.subsystems, tokens=cls.tokens,
+                        limit=_MAX_MATCHES):
                     match = dict(match)
                     match["block"] = f"L{block.start}-{block.end}"
                     prev = best.get(match["id"])

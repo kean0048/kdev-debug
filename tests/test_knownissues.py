@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from dmesg_agent.knownissues import (KnownIssueStore, classify_text,
-                                     is_noise_issue, series_key)
+from dmesg_agent.knownissues import (Classification, KnownIssueStore,
+                                     classify_text, is_noise_issue, series_key)
 from dmesg_agent.plugins.learn import (build_parser, fetch_lore_search,
                                        iter_mbox, learn, _lore_request)
 
@@ -410,6 +410,28 @@ def test_search_ranks_exact_fingerprint_before_same_class(tmp_path):
     assert [h["id"] for h in hits[:2]] == [1, 2]
     assert "exact fingerprint" in hits[0]["match"]
     assert "same fault class" in hits[1]["match"]
+
+
+def test_search_similarity_outranks_class_only(tmp_path):
+    store = KnownIssueStore(tmp_path / "ki.db")
+    class_only = Classification(
+        subsystems=["firmware"], fault_classes=["firmware"],
+        subsystem="firmware", fault_class="firmware", fingerprint="fp-a",
+        core={}, tokens=["alpha", "beta"], has_log=True)
+    similar = Classification(
+        subsystems=["firmware"], fault_classes=["unclassified"],
+        subsystem="firmware", fault_class="unclassified", fingerprint="fp-b",
+        core={}, tokens=["iwlwifi", "firmware", "ucode", "missing"],
+        has_log=True)
+    store.upsert(source="lore", source_id="a", url="u1", title="class only",
+                 classification=class_only)
+    store.upsert(source="lore", source_id="b", url="u2", title="similar",
+                 classification=similar)
+    hits = store.search(fault_classes=["firmware"], subsystems=["firmware"],
+                        tokens=["iwlwifi", "firmware", "ucode", "missing"],
+                        limit=5)
+    assert [hit["id"] for hit in hits] == [2, 1]
+    assert hits[0]["similarity"] == 1.0
 
 
 def test_search_ignores_generic_fault_classes(tmp_path):

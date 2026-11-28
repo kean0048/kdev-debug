@@ -383,10 +383,11 @@ class KnownIssueStore:
                subsystems=None, tokens=None, limit: int = 5) -> list[dict]:
         """Recall known issues for a live diagnosis.
 
-        Ranking is structural, not probabilistic: an exact fingerprint beats a
-        shared fault class, which beats a bare subsystem match, and token
-        Jaccard similarity adds a graded signal. Subsystem-only matches are
-        dropped — too weak to present as a known issue.
+        Ranking is structural, not probabilistic: an exact fingerprint
+        dominates; token Jaccard similarity and a shared specific fault class
+        then rank candidates (similarity can outrank a class-only match, e.g.
+        the same missing-firmware symptom on a neighbouring device). A bare
+        subsystem match is dropped — too weak to present as a known issue.
         """
         # Generic triage buckets (warning/fault/driver/…) are not a real
         # similarity signal; matching on them would inject unrelated issues.
@@ -411,13 +412,13 @@ class KnownIssueStore:
                 score += 100
                 why.append("exact fingerprint")
             if row["fault_class"] in q_classes:
-                score += 40
+                score += 20
                 why.append(f"same fault class ({row['fault_class']})")
             if row["subsystem"] in q_subs:
-                score += 10
+                score += 5
                 why.append("same subsystem")
-            if sim >= 0.25:
-                score += round(sim * 50)
+            if sim >= 0.20:
+                score += round(sim * 60)
                 why.append(f"token similarity {sim:.2f}")
             if score <= 10:  # subsystem-only is too weak to act on
                 continue
