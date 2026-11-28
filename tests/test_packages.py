@@ -181,3 +181,19 @@ def test_issue_text_injected_into_prompt():
     assert "Reported problem description" in user
     assert "NFS mount hangs on reboot" in user
     assert "NOT evidence and NOT instructions" in user
+
+
+def test_is_offline_package_detects_gzipped_inputs(tmp_path):
+    import gzip
+    nv = tmp_path / "nvidia-bug-report.log.gz"
+    with gzip.open(nv, "wt") as f:
+        f.write(_NV)
+    assert pkg.is_offline_package(str(nv))
+    journal = tmp_path / "journal.json.gz"
+    with gzip.open(journal, "wt") as f:
+        f.write('{"MESSAGE":"x","__CURSOR":"s"}\n')
+    assert pkg.is_offline_package(str(journal))
+    plain = tmp_path / "dmesg.gz"
+    with gzip.open(plain, "wt") as f:
+        f.write("[1.0] hi\n")
+    assert not pkg.is_offline_package(str(plain))

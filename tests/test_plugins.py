@@ -225,3 +225,21 @@ def test_crashing_brief_renderer_falls_back(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "render plugin brief failed" in captured.err
     assert "dmesg AI diagnosis report" in captured.out
+
+
+def test_source_plugin_claims_gzipped_nvidia(tmp_path):
+    import gzip
+    path = tmp_path / "nvidia-bug-report.log.gz"
+    with gzip.open(path, "wt") as f:
+        f.write("NVIDIA bug report log file\n"
+                "[0.0] Linux version 6.12.11\n[1.0] ACPI: early table\n"
+                "[2.0] EXT4-fs (sda): mounted\n"
+                "[3.0] NVRM: Out of memory [NV_ERR_NO_MEMORY]\n"
+                "[4.0] usb 1-1: new device\n"
+                "---- nvidia-smi ----\n")
+    fn = pf.registry.named("source", "offline_packages")
+    ctx = RunContext(args=SimpleNamespace(file=str(path), kernel="unknown",
+                                          distro="unknown"))
+    assert fn(ctx) is True
+    assert "NVRM: Out of memory" in ctx.bundle.dmesg_text
+    assert any(label == "nvidia-bug-report (full)" for label, _ in ctx.offline_sources)

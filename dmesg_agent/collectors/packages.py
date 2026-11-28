@@ -16,6 +16,7 @@ and evidence corpus exactly like a live system-scan would.
 from __future__ import annotations
 
 import datetime as _dt
+import gzip
 import json
 import re
 import tarfile
