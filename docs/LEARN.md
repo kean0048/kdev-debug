@@ -27,8 +27,13 @@ thread/patch text is never kept.
 |---|---|---|
 | fingerprint + tokens | retrieval (L3) | 40 tokens |
 | subsystem + fault_class | L1/L2 index | — |
-| title / root_cause / fix | offline summary | 140 / 200 / 120 chars |
+| title / root_cause / fix | offline summary + lookup pointer | 140 / 200 chars; fix = commit / url / bug / version / workaround |
 | urls | external pointer | — |
+
+`fix` is a pointer, not a summary: a commit hash, source URL, bug/issue number,
+fixed version or a short workaround (each bounded). Comments, patch bodies and
+diff text are never stored — they are transient input to classification and
+extraction only. Log snippets are capped at 4 × 200 chars.
 
 One record ≈ 0.6 KB; duplicate sources of the same fingerprint merge into one
 row with multiple URLs. `tests/test_knownissues.py::test_record_is_tiny` guards
@@ -81,9 +86,10 @@ dmesg-agent learn --auto --loop --interval 86400
   split into calendar-year windows (`d:YYYY0101..YYYY1231`) scanned newest
   first, with `--auto-since-year` (default 2018) as the floor. A window with
   no matching mail is skipped, not treated as an error.
-- Resolved Bugzilla bugs keep their whole comment thread (bounded), so
-  "fixed by commit …" reaches the extractor; lore patches carry `Fixes:`
-  trailers. Launchpad/GitLab remain explicit `--tracker-query` sources.
+- Bugzilla issues keep the bug id + URL as their fix pointer; only the
+  reporter's first comment is read transiently for classification/extraction
+  and is never stored. Lore patches carry `Fixes:`/commit trailers instead.
+  Launchpad/GitLab remain explicit `--tracker-query` sources.
 - Extraction stays inline and capped per run (`--max-extract`); repeated or
   `--loop` runs re-see pending records and fill gaps, while source-id and
   fingerprint dedup prevent duplicates. Fix records therefore accumulate over
@@ -134,8 +140,9 @@ dmesg-agent learn --lore-search 'nvmet-tcp TLS handshake timeout' \
 - Uses the configured LLM (same provider/config as diagnosis) on new or
   still-pending records; already-extracted records are skipped, so rerunning
   fills gaps instead of re-paying.
-- Fills `symptom`, `root_cause`, `fix` (`commit` / `upgrade_to` /
-  `workaround`), `confidence`, and `log_snippets`.
+- Fills `symptom`, `root_cause`, `fix` (`commit` / `url` / `bug` /
+  `upgrade_to` / `workaround` — pointers, not prose), `confidence`, and
+  `log_snippets` (≤4, each ≤200 chars).
 - Anti-hallucination: every `log_snippet` must match the source text verbatim
   (same normalization as verify.py), and a `fix.commit` must appear in the
   source; invented snippets/hashes are dropped and reported in `--verbose`.

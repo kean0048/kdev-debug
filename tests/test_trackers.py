@@ -70,7 +70,8 @@ def test_fetch_bugzilla_reports_progress(monkeypatch):
     assert any("descriptions 1/1" in m for m in messages)
 
 
-def test_fetch_bugzilla_fixed_bug_reads_the_whole_thread(monkeypatch):
+def test_fetch_bugzilla_reads_only_the_first_comment(monkeypatch):
+    # Full comment threads are not fetched; the bug id/URL is the fix pointer.
     _serve(monkeypatch, [
         ("/rest/bug/7/comment", {"bugs": {"7": {"comments": [
             {"text": "reporter description"},
@@ -82,7 +83,8 @@ def test_fetch_bugzilla_fixed_bug_reads_the_whole_thread(monkeypatch):
     issues = trackers.fetch_bugzilla("https://b", "nvme timeout")
     body = issues[0]["body"]
     assert "reporter description" in body
-    assert "Fixed by commit deadbeef1234" in body
+    assert "Fixed by commit deadbeef1234" not in body
+    assert issues[0]["url"].endswith("id=7")
 
 
 def test_fetch_bugzilla_accepts_simple_comment_list(monkeypatch):
@@ -166,3 +168,4 @@ def test_learn_ingests_tracker_results(monkeypatch, tmp_path):
     row = store.list()[0]
     assert row["subsystem"] == "storage" and row["fault_class"] == "nvme"
     assert row["source"] == "launchpad"
+    assert row["fix"]["bug"] == "42"  # compact pointer, not comment text

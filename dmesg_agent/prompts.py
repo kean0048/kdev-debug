@@ -172,7 +172,8 @@ def render_known_issues(matches: list[dict], max_chars: int = 1_800) -> str:
         if m.get("root_cause"):
             parts.append(f"  Known cause: {str(m['root_cause'])[:180]}")
         fix = m.get("fix") or {}
-        bits = [f"{k}={fix[k]}" for k in ("commit", "upgrade_to", "workaround")
+        bits = [f"{k}={fix[k]}" for k in ("commit", "url", "bug",
+                                          "upgrade_to", "workaround")
                 if fix.get(k)]
         if bits:
             parts.append("  Known fix: " + "; ".join(bits))

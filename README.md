@@ -238,7 +238,9 @@ dmesg-agent learn --auto [--auto-max-mb 512] [--auto-max-queries N]
 message-id needed**; broad queries can be large, so the download is capped by
 `--max-download-mb`. `--extract` asks the configured LLM to fill
 symptom / root_cause / fix / confidence / log_snippets; snippets must be
-verbatim and a fix commit must appear in the source, otherwise it is dropped.
+verbatim and fix pointers (commit / URL / bug number) must appear in the
+source, otherwise they are dropped. The stored fix is a lookup pointer, never
+comment or patch text.
 
 Disable at startup: `DMESG_AGENT_DISABLE_PLUGINS=<module>,...` (module names,
 e.g. `collect_facts,web,learn`).
@@ -543,16 +545,17 @@ instead of requiring per-topic commands: one targeted lore query per common
 fault class/subsystem plus kernel.org Bugzilla queries, under a global
 download budget (`--auto-max-mb`). Lore queries are split into per-year
 windows (`--auto-since-year`, default 2018, newest first), so broad topics
-are covered without exceeding a single-download cap. Resolved Bugzilla bugs
-keep their whole comment thread so fix/backport commit hashes reach the
-extractor. Repeated or `--loop` runs dedupe by source id/fingerprint and keep
-extracting pending records, so coverage and fix records accumulate.
+are covered without exceeding a single-download cap. Bugzilla issues keep the
+bug id + URL as their fix pointer; only the reporter's first comment is read
+(transiently, never stored). Repeated or `--loop` runs dedupe by source
+id/fingerprint and keep extracting pending records, so coverage and compact
+fix pointers accumulate.
 
 The same catalog runs on a schedule in GitHub Actions
 (`.github/workflows/known-issues.yml`); the rebuilt SQLite store is uploaded
 as a workflow artifact for local use with `--known-issues-db`. CI has no LLM
 credentials, so its artifact carries the issue/fingerprint index; run
-`learn --auto --extract` locally to fill root causes and fix commits.
+`learn --auto --extract` locally to fill root causes and compact fix pointers.
 
 ## Development
 

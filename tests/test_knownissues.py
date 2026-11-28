@@ -94,6 +94,21 @@ def test_record_is_tiny(tmp_path):
     assert size < 8192, f"store grew to {size} bytes for one record"
 
 
+def test_fix_pointers_and_snippets_are_bounded(tmp_path):
+    store = KnownIssueStore(tmp_path / "ki.db")
+    c = classify_text("nvme timeout", "[1.0] nvme nvme0: I/O 12 timeout")
+    store.upsert(**_mk(c, fix={"url": "https://example/" + "x" * 400,
+                               "bug": "1234567890"}))
+    row = store.get(1)
+    assert len(row["fix"]["url"]) == 300
+    assert row["fix"]["bug"] == "1234567890"
+    store.set_extraction(1, symptom="s", root_cause="r", fix={},
+                         log_snippets=["x" * 500] * 6, confidence=0.5)
+    row = store.get(1)
+    assert len(row["log_snippets"]) == 4
+    assert all(len(snippet) == 200 for snippet in row["log_snippets"])
+
+
 def test_watermark_cursor(tmp_path):
     store = KnownIssueStore(tmp_path / "ki.db")
     assert store.get_watermark("lore") == ""

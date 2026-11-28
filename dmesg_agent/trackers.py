@@ -116,14 +116,11 @@ def fetch_bugzilla(base: str, query: str, limit: int = 25,
                         else:
                             entries = []
                         if entries:
-                            # A resolved bug's later comments are where the
-                            # fix/backport commit hash usually lives; keep the
-                            # whole thread (bounded) so extraction can use it.
-                            if str(bug.get("resolution") or "").upper() == "FIXED":
-                                body_parts.append("\n\n".join(
-                                    str(e.get("text") or "") for e in entries)[:8000])
-                            else:
-                                body_parts.append(str(entries[0].get("text") or ""))
+                            # Only the reporter's first comment is read, and
+                            # only transiently for classification/extraction.
+                            # The record keeps the bug id/URL as its fix
+                            # pointer; comment text is never stored.
+                            body_parts.append(str(entries[0].get("text") or ""))
                 except ValueError:
                     pass  # comment text is optional; keep the summary record
                 if progress and (idx + 1) % interval == 0:

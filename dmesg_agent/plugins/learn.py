@@ -313,9 +313,15 @@ def _maybe_extract(store, issue: dict, client, args, state: dict) -> None:
         print(f"warning: extraction returned unusable JSON for "
               f"{issue['title'][:60]!r}", file=sys.stderr)
         return
+    # Keep the deterministic issue-number pointer even when the extractor
+    # returns a different (or empty) fix.
+    fix = dict(data.get("fix") or {})
+    for key in ("bug", "url"):
+        if (row.get("fix") or {}).get(key) and not fix.get(key):
+            fix[key] = row["fix"][key]
     store.set_extraction(
         row["id"], symptom=data.get("symptom", ""),
-        root_cause=data.get("root_cause", ""), fix=data.get("fix") or {},
+        root_cause=data.get("root_cause", ""), fix=fix,
         log_snippets=data.get("log_snippets") or [],
         confidence=data.get("confidence", 0.0),
         model=getattr(client, "last_model", None) or "")
@@ -327,7 +333,7 @@ def _maybe_extract(store, issue: dict, client, args, state: dict) -> None:
         if dropped:
             extra += f", {dropped} snippet(s) dropped as non-verbatim"
         if bad_fix:
-            extra += f", {bad_fix} unverified fix commit dropped"
+            extra += f", {bad_fix} unverified fix pointer(s) dropped"
         print(f"  extracted: {data.get('root_cause', '')[:90]}{extra}",
               file=sys.stderr)
 
@@ -356,10 +362,16 @@ def _ingest(store: KnownIssueStore, issues: list[dict], args, seen: set[str],
             if args.verbose:
                 print(f"  skip noise: {issue['title'][:70]}")
             continue
+        # Tracker issues already have a lookup pointer: the bug/issue number.
+        # The store keeps that pointer, not the comment text.
+        fix = {}
+        if issue["source"].startswith(("bugzilla:", "gitlab:")) \
+                or issue["source"] == "launchpad":
+            fix["bug"] = str(issue["source_id"])
         created = store.upsert(
             source=issue["source"], source_id=issue["source_id"], url=issue["url"],
             title=issue["title"], classification=cls,
-            series_key=series_key_for(issue["title"]))
+            fix=fix, series_key=series_key_for(issue["title"]))
         new += 1 if created else 0
         dedup += 0 if created else 1
         _maybe_extract(store, issue, client, args, state)

@@ -77,6 +77,40 @@ def test_compact_message_drops_diff_and_keeps_trailers():
     assert "Fixes: abc123def456" in text
 
 
+def test_validate_keeps_fix_pointers_verbatim():
+    source = ("subject\nSee https://lore.kernel.org/all/msg1/ and bug 1234567\n"
+              "Fixes: abc1234\n" + LOG_LINE)
+    data, errors = validate_extraction(
+        {"symptom": "s", "root_cause": "r", "confidence": 0.5,
+         "fix": {"commit": "abc1234",
+                 "url": "https://lore.kernel.org/all/msg1/",
+                 "bug": "1234567"},
+         "log_snippets": []}, source)
+    assert errors == []
+    assert data["fix"]["url"] == "https://lore.kernel.org/all/msg1/"
+    assert data["fix"]["bug"] == "1234567"
+
+
+def test_validate_drops_hallucinated_fix_pointers():
+    data, errors = validate_extraction(
+        {"symptom": "s", "root_cause": "r",
+         "fix": {"url": "https://evil.example/x", "bug": "9999999"},
+         "log_snippets": []}, "nothing like that here")
+    assert errors == []
+    assert data["fix"] == {}
+    assert data["_dropped_fix_commit"] == 2
+
+
+def test_snippets_are_bounded_to_four_times_200():
+    line = "[1.0] " + "x" * 600
+    data, errors = validate_extraction(
+        {"symptom": "s", "log_snippets": [line] * 6, "root_cause": "",
+         "fix": {}, "confidence": 0.1}, line)
+    assert errors == []
+    assert len(data["log_snippets"]) == 4
+    assert all(len(snippet) == 200 for snippet in data["log_snippets"])
+
+
 def test_validate_drops_hallucinated_commit():
     data, errors = validate_extraction(
         {"symptom": "s", "root_cause": "r",

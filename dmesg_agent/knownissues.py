@@ -32,7 +32,17 @@ from .triage import SIGNATURES
 MAX_TOKENS = 40
 TITLE_LEN = 140
 ROOT_CAUSE_LEN = 200
-FIX_LEN = 120
+# fix holds lookup pointers, never prose/comments: commit, source URL, bug id.
+FIX_LIMITS = {"commit": 120, "url": 300, "bug": 40,
+              "upgrade_to": 120, "workaround": 120}
+
+
+def _sanitize_fix(fix: dict | None) -> dict:
+    out: dict = {}
+    for key, limit in FIX_LIMITS.items():
+        if fix and fix.get(key):
+            out[key] = str(fix[key])[:limit]
+    return out
 
 _LOG_RE = re.compile(r"\[\s*\d+\.\d+\]|^NVRM:| kernel: |^\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}")
 
@@ -273,12 +283,9 @@ class KnownIssueStore:
             (source, source_id)).fetchone()
         if row is not None:
             return False
-        fix = fix or {}
+        fix = _sanitize_fix(fix)
         title = (title or "")[:TITLE_LEN]
         root_cause = (root_cause or "")[:ROOT_CAUSE_LEN]
-        for k in ("commit", "upgrade_to", "workaround"):
-            if fix.get(k):
-                fix[k] = str(fix[k])[:FIX_LEN]
         dup = None
         if series_key:
             dup = self._conn.execute(
@@ -439,17 +446,15 @@ class KnownIssueStore:
     def set_extraction(self, issue_id: int, *, symptom: str, root_cause: str,
                        fix: dict, log_snippets: list[str], confidence: float,
                        model: str = "") -> None:
-        fix = fix or {}
-        for k in ("commit", "upgrade_to", "workaround"):
-            if fix.get(k):
-                fix[k] = str(fix[k])[:FIX_LEN]
+        fix = _sanitize_fix(fix)
         self._conn.execute(
             "UPDATE known_issues SET symptom=?, root_cause=?, fix_json=?, "
             "log_snippets_json=?, confidence=?, extracted=1, extracted_at=?, "
             "extraction_model=? WHERE id=?",
             (str(symptom or "")[:ROOT_CAUSE_LEN], str(root_cause or "")[:ROOT_CAUSE_LEN],
              json.dumps(fix, ensure_ascii=False),
-             json.dumps(list(log_snippets or [])[:8], ensure_ascii=False),
+             json.dumps([str(s)[:200] for s in (log_snippets or [])[:4]],
+                        ensure_ascii=False),
              max(0.0, min(1.0, float(confidence or 0.0))), _now(), model, issue_id))
         self._conn.commit()
 

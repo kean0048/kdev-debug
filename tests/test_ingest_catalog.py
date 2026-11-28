@@ -80,3 +80,5 @@ def test_learn_auto_runs_lore_and_bugzilla(monkeypatch, tmp_path):
     assert any(kind == "bugzilla" for kind, _ in calls)
     store = KnownIssueStore(db)
     assert store.count() == 2
+    fixes = {row["source"]: row["fix"] for row in store.list()}
+    assert fixes["bugzilla:test"]["bug"] == "9"  # pointer, not comment text
