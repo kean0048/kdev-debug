@@ -27,7 +27,8 @@ from pathlib import Path
 from .. import __version__
 from ..config import load_config
 from ..extractor import extract_issue
-from ..ingest_catalog import CATALOG, DEFAULT_TRACKER_BASE, selected_entries
+from ..ingest_catalog import (CATALOG, DEFAULT_TRACKER_BASE, resolve_ids,
+                              selected_entries)
 from ..knownissues import (KnownIssueStore, classify_text, is_noise_issue,
                            series_key as series_key_for)
 from ..llm import Client, LLMError
@@ -240,19 +241,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--gitlab-token", default=None,
                    help="GitLab token for private projects (or GITLAB_TOKEN)")
     p.add_argument("--auto", action="store_true",
-                   help="run the built-in catalog: targeted lore + Bugzilla "
-                        "queries per subsystem, including fix threads")
-    p.add_argument("--auto-max-mb", type=int, default=512, metavar="MB",
-                   help="total lore download budget per --auto pass "
+                   help="run the built-in catalog (the default when no other "
+                        "source is given)")
+    p.add_argument("--auto-max-mb", "--max-mb", dest="auto_max_mb", type=int,
+                   default=512, metavar="MB",
+                   help="total lore download budget per pass "
                         "(0 = unlimited; default 512)")
-    p.add_argument("--auto-max-queries", type=int, default=0, metavar="N",
-                   help="max catalog entries per --auto pass (0 = all)")
-    p.add_argument("--auto-only", metavar="ID", action="append", default=[],
-                   help="with --auto, run only these catalog entry ids "
-                        "(repeatable)")
-    p.add_argument("--auto-since-year", type=int, default=2018, metavar="YYYY",
-                   help="with --auto, ingest per-year lore windows from YYYY to "
-                        "the current year, newest first (default 2018)")
+    p.add_argument("--auto-max-queries", "--max-queries",
+                   dest="auto_max_queries", type=int, default=0, metavar="N",
+                   help="max catalog entries per pass (0 = all)")
+    p.add_argument("--auto-only", "--only", dest="auto_only", metavar="ID",
+                   action="append", default=[],
+                   help="run catalog entries whose id matches this "
+                        "prefix/substring (repeatable)")
+    p.add_argument("--auto-since-year", "--since-year", dest="auto_since_year",
+                   type=int, default=2018, metavar="YYYY",
+                   help="ingest per-year lore windows from YYYY to the current "
+                        "year, newest first (default 2018)")
+    p.add_argument("--list", action="store_true",
+                   help="list the built-in catalog entries and exit")
     p.add_argument("--max-download-mb", type=int, default=128,
                    help="cap for one lore search mbox (default 128 MB)")
     p.add_argument("--source", default="lore", help="source label (default: lore)")
@@ -384,15 +391,20 @@ def _ingest(store: KnownIssueStore, issues: list[dict], args, seen: set[str],
           description="ingest community issues (lore mbox) into the known-issue store")
 def learn(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
+    if args.list:
+        print(f"{'id':<22} {'subsystem':<10} query")
+        for entry in CATALOG:
+            query = entry.get("lore") or entry.get("bugzilla") or ""
+            extra = (f"  | bugzilla: {entry['bugzilla']}"
+                     if entry.get("lore") and entry.get("bugzilla") else "")
+            print(f"{entry['id']:<22} {entry['subsystem']:<10} {query}{extra}")
+        return 0
     trackers_requested = bool(args.bugzilla or args.launchpad or args.gitlab)
+    if args.auto_only:
+        args.auto = True  # --only is an auto request
     if not args.auto and not args.mbox and not args.lore_search \
             and not trackers_requested:
-        print("error: no input — pass --auto (built-in catalog), "
-              "--mbox /path/to/lore.mbox, --lore-search 'query' (bulk, no "
-              "message-id needed), or a REST tracker "
-              "(--bugzilla/--launchpad/--gitlab with --tracker-query)",
-              file=sys.stderr)
-        return 2
+        args.auto = True  # the catalog is the default action
     if trackers_requested and not args.tracker_query:
         print("error: --tracker-query is required with "
               "--bugzilla/--launchpad/--gitlab", file=sys.stderr)
@@ -453,17 +465,24 @@ def learn(argv: list[str]) -> int:
                       file=sys.stderr, flush=True)
                 accumulate(issues)
             if args.auto:
-                only = set(args.auto_only) or None
-                if only:
-                    unknown = only - {entry["id"] for entry in CATALOG}
+                only = None
+                if args.auto_only:
+                    resolved, unknown = resolve_ids(args.auto_only)
                     if unknown:
                         print(f"warning: unknown catalog id(s): "
                               f"{', '.join(sorted(unknown))}", file=sys.stderr)
-                entries = selected_entries(args.auto_max_queries, only)
-                if not entries:
-                    print("error: --auto-only matched no catalog entry",
+                    only = resolved
+                entries = selected_entries(args.auto_max_queries,
+                                           only if args.auto_only else None)
+                if args.auto_only and not entries:
+                    print("error: --only/--auto-only matched no catalog entry",
                           file=sys.stderr)
                     failed = True
+                if entries and not args.auto_only:
+                    print(f"auto: {len(entries)} catalog entr(ies), budget "
+                          f"{args.auto_max_mb or '∞'} MB — `learn --list` shows "
+                          f"ids, `--only ID` runs a subset", file=sys.stderr,
+                          flush=True)
                 budget = args.auto_max_mb * 1024 * 1024 if args.auto_max_mb else None
                 used = 0
                 auto_new = 0

@@ -99,6 +99,25 @@ CATALOG: list[dict] = [
 def selected_entries(limit: int = 0, only: set[str] | None = None) -> list[dict]:
     """Catalog entries for one --auto pass (limit 0 = all; only = id filter)."""
     entries = list(CATALOG[:limit]) if limit else list(CATALOG)
-    if only:
+    if only is not None:
         entries = [entry for entry in entries if entry["id"] in only]
     return entries
+
+
+def resolve_ids(tokens: list[str]) -> tuple[set[str], list[str]]:
+    """Resolve --only tokens by exact id, prefix or substring.
+
+    `--only iwlwifi` selects both iwlwifi catalog entries; `--only nvme`
+    selects nvme-timeout and nvmet-tcp. Returns (resolved ids, unknown tokens).
+    """
+    ids = [entry["id"] for entry in CATALOG]
+    resolved: set[str] = set()
+    unknown: list[str] = []
+    for token in tokens:
+        matches = [item for item in ids
+                   if item == token or item.startswith(token) or token in item]
+        if matches:
+            resolved.update(matches)
+        else:
+            unknown.append(token)
+    return resolved, unknown

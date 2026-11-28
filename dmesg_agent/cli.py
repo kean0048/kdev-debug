@@ -48,6 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
     src.add_argument("--file", metavar="PATH", help="analyze an offline log: dmesg/kern.log "
                         "(.gz, '-' for stdin), journalctl -o json/export, nvidia-bug-report.log[.gz], "
                         "or a sosreport tarball (.tar/.tar.gz/.tar.xz)")
+    p.add_argument("input", nargs="?", metavar="LOG",
+                   help="offline log/package path (shorthand for --file)")
     p.add_argument("--issue", metavar="PATH", help="a text file with the reporter's problem "
                                                    "description (Jira body, etc.); context only — "
                                                    "never treated as evidence or instructions")
@@ -491,6 +493,10 @@ def _warn_plugin(fn, kind: str, e: Exception) -> None:
           f"({type(e).__name__}: {e}); continuing", file=sys.stderr)
 
 
+_BUILTIN_COMMANDS = {"config", "check", "eval", "cases", "score", "plugins",
+                     "completion"}
+
+
 def _run_cli(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -507,17 +513,33 @@ def _run_cli(argv: list[str] | None = None) -> int:
         return score_main(argv[1:])
     if argv and argv[0] == "plugins":
         return _plugins_main(argv[1:])
-    if argv and argv[0] not in {"config", "check", "eval", "cases", "score", "plugins"} \
-            and not argv[0].startswith("-"):
+    if argv and argv[0] == "completion":
+        from .completion import completion_main
+        return completion_main(argv[1:])
+    if argv and argv[0] not in _BUILTIN_COMMANDS and not argv[0].startswith("-"):
         registry = plugin_framework.load_plugins()
         command = registry.named("command", argv[0])
         if command is not None:
             return command(argv[1:])
-        print(f"error: unknown command {argv[0]!r} — a command plugin may be "
-              f"disabled or missing (see `dmesg-agent plugins list`)", file=sys.stderr)
-        return 2
+        # Not a command: a positional offline log path is allowed, but a
+        # plain typo should keep the helpful unknown-command message.
+        if argv[0] != "-" and not Path(argv[0]).exists():
+            print(f"error: unknown command {argv[0]!r} (and no such file) — a "
+                  f"command plugin may be disabled or missing (see "
+                  f"`dmesg-agent plugins list`)", file=sys.stderr)
+            return 2
 
     args = build_parser().parse_args(argv)
+    if args.input:
+        if args.ssh:
+            print("error: a positional LOG path is offline input and cannot be "
+                  "combined with --ssh", file=sys.stderr)
+            return 2
+        if args.file and str(args.file) != args.input:
+            print("error: give the log path either positionally or with "
+                  "--file, not both", file=sys.stderr)
+            return 2
+        args.file = args.input
     registry = plugin_framework.load_plugins()
     log = _Log(args.verbose)
     resolver = PassResolver(args.askpass)

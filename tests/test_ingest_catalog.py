@@ -73,8 +73,10 @@ def test_learn_auto_runs_lore_and_bugzilla(monkeypatch, tmp_path):
     monkeypatch.setattr(learn_mod, "fetch_lore_search", fake_lore)
     monkeypatch.setattr(learn_mod, "fetch_bugzilla", fake_bugzilla)
     db = tmp_path / "ki.db"
-    code = learn_mod.learn(["--auto", "--auto-max-queries", "1",
-                            "--db", str(db)])
+    # No explicit source and no --auto: the catalog is the default action.
+    code = learn_mod.learn([
+        "--max-queries", "1", "--since-year", str(datetime.now().year),
+        "--db", str(db)])
     assert code == 0
     assert calls[0][0] == "lore"
     assert any(kind == "bugzilla" for kind, _ in calls)

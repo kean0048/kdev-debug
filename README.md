@@ -39,12 +39,17 @@ dmesg-agent config providers
 dmesg-agent config use local --base-url http://127.0.0.1:8000
 dmesg-agent config use deepseek                  # export DEEPSEEK_API_KEY first
 
-# offline analysis (file mode: no live collection)
-dmesg-agent --file dmesg.txt --kernel 6.12.11 --distro "Debian 13" -o report.md
-dmesg-agent --file sosreport-*.tar.xz --issue jira.txt --host-id JIRA-1234 \
+# offline analysis (a positional LOG path is shorthand for --file;
+# the configured provider and known-issue DB are used automatically)
+dmesg-agent dmesg.txt --kernel 6.12.11 --distro "Debian 13" -o report.md
+dmesg-agent sosreport-*.tar.xz --issue jira.txt --host-id JIRA-1234 \
   -o report.md --html report.html
-dmesg-agent --file nvidia-bug-report.log.gz --host-id JIRA-1234 -o report.md
-dmesg-agent --file journal-export.json -o report.md
+dmesg-agent nvidia-bug-report.log.gz --host-id JIRA-1234 -o report.md
+dmesg-agent journal-export.json -o report.md
+
+# shell completion: Tab lists commands, options, values and catalog ids
+eval "$(dmesg-agent completion bash)"    # bash
+eval "$(dmesg-agent completion zsh)"     # zsh, after compinit
 
 # live diagnosis (full pipeline)
 sudo dmesg-agent
@@ -60,11 +65,27 @@ dmesg-agent eval --live --provider local
 dmesg-agent score --no-tests
 dmesg-agent plugins list
 dmesg-agent cases list
-dmesg-agent learn --mbox lore.mbox --verbose   # ingest community issues (see docs/LEARN.md)
+dmesg-agent learn --list                       # known-issue catalog entries
+dmesg-agent learn --only iwlwifi --extract     # top up one subsystem, with fixes
+dmesg-agent learn                              # full catalog ingest (issues)
+dmesg-agent learn --mbox lore.mbox --verbose   # explicit lore mbox instead
 dmesg-agent learn --tracker-query 'nvme timeout' --bugzilla https://bugzilla.kernel.org --launchpad
 ```
 
 Every command supports `--help`; the complete option and subcommand reference follows the examples.
+
+### Shell completion
+
+```bash
+eval "$(dmesg-agent completion bash)"
+eval "$(dmesg-agent completion zsh)"   # after compinit
+```
+
+Tab completes subcommands, every option of the current command, argparse
+choices (`--provider`), catalog ids for `learn --only`, and falls back to file
+paths. Permanent install: write the generated script to
+`~/.local/share/bash-completion/completions/dmesg-agent` (bash) or to a
+directory in `$fpath` named `_dmesg-agent` (zsh).
 
 ### More examples
 
@@ -222,18 +243,25 @@ dmesg-agent plugins list
 see `docs/LEARN.md`):
 
 ```bash
+dmesg-agent learn                        # built-in catalog (the default action)
+dmesg-agent learn --extract              # + LLM root cause / fix pointers
+dmesg-agent learn --list                 # show catalog ids and queries
+dmesg-agent learn --only iwlwifi         # prefix/substring id match, repeatable
+                  [--extract] [--max-mb 512] [--max-queries N]
+                  [--since-year 2018] [--limit N] [--loop] [--interval SEC]
+
+# explicit sources (instead of / in addition to the catalog)
 dmesg-agent learn --mbox lore.mbox [--source lore] [--since 2024-01-01]
                   [--limit N] [--loop] [--interval SEC] [--db PATH] [--verbose]
 dmesg-agent learn --lore-search 'nvme timeout' [--full-threads]
                   [--max-download-mb 128] [--limit N] [--verbose]
-                  [--extract --max-extract 25] [--provider NAME] [--base-url URL]
 dmesg-agent learn --tracker-query 'nvme timeout'
                   [--bugzilla BASE]... [--launchpad] [--gitlab PROJECT_URL]...
                   [--tracker-limit 25] [--gitlab-token TOKEN]
-dmesg-agent learn --auto [--auto-max-mb 512] [--auto-max-queries N]
-                  [--limit N] [--extract --max-extract 25] [--loop]
 ```
 
+`--max-mb`, `--max-queries`, `--since-year` and `--only` are short aliases for
+`--auto-max-mb`, `--auto-max-queries`, `--auto-since-year` and `--auto-only`.
 `--lore-search` pulls a search-result mbox directly (POST form) — **no
 message-id needed**; broad queries can be large, so the download is capped by
 `--max-download-mb`. `--extract` asks the configured LLM to fill
@@ -254,6 +282,13 @@ dmesg-agent web [--host 127.0.0.1] [--port 8790] [--token TOKEN]
 
 Non-loopback `--host` auto-generates an access token. Every subcommand
 supports `--help`.
+
+`completion` — shell completion (built-in):
+
+```bash
+dmesg-agent completion bash    # eval "$(dmesg-agent completion bash)"
+dmesg-agent completion zsh     # eval "$(dmesg-agent completion zsh)"
+```
 
 Environment variables: `DMESG_AGENT_PROVIDER`, `DMESG_AGENT_BASE_URL`, `DMESG_AGENT_MODEL`, `DMESG_AGENT_API_KEY`, `DMESG_AGENT_EXTRA_BODY` (JSON object merged into the request body), `DMESG_AGENT_DISABLE_PLUGINS` (comma-separated plugin module names), `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` (fallback), `ANTHROPIC_BASE_URL` (Anthropic provider only), `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `OPENROUTER_API_KEY`, `DMESG_AGENT_SSH_PASSWORD`, `DMESG_AGENT_KERNEL_SRC`, `DMESG_AGENT_VMLINUX`, `DMESG_AGENT_KNOWLEDGE_DB`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` (case library/archive; falls back to `XDG_STATE_HOME`, cache, then a per-UID temp dir when unwritable), `XDG_STATE_HOME`, `NO_COLOR`. Config precedence everywhere: CLI flag > env var > config file > provider preset > default.
 
@@ -517,9 +552,11 @@ dmesg-agent learn --tracker-query 'nvme timeout' \
 
 # automatic catalog: targeted lore + Bugzilla queries for the common fault
 # classes (storage/memory/gpu/network/usb/firmware/hardware/locking)
-dmesg-agent learn --auto --auto-max-mb 512
-dmesg-agent learn --auto --extract --max-extract 200   # fill root cause/fix
-dmesg-agent learn --auto --loop --interval 86400       # keep it current
+dmesg-agent learn                       # catalog is the default action
+dmesg-agent learn --list                # show ids/queries
+dmesg-agent learn --only iwlwifi        # prefix/substring id match
+dmesg-agent learn --extract --max-extract 200   # fill root cause / fix pointers
+dmesg-agent learn --loop --interval 86400       # keep it current
 ```
 
 `.mbox.gz` is supported; HTML pages are rejected with a clear error. Ingest
@@ -541,11 +578,12 @@ the model's `known_issue_usage` verdict (applied / considered / rejected);
 zero matches — or a missing store — are stated explicitly, so you can tell
 whether the community store influenced a diagnosis.
 
-`learn --auto` walks the built-in catalog (`dmesg_agent/ingest_catalog.py`)
-instead of requiring per-topic commands: one targeted lore query per common
-fault class/subsystem plus kernel.org Bugzilla queries, under a global
-download budget (`--auto-max-mb`). Lore queries are split into per-year
-windows (`--auto-since-year`, default 2018, newest first), so broad topics
+`learn` (no source needed; `--auto` is kept as a compatible alias) walks the
+built-in catalog (`dmesg_agent/ingest_catalog.py`) instead of requiring
+per-topic commands: one targeted lore query per common fault
+class/subsystem plus kernel.org Bugzilla queries, under a global download
+budget (`--max-mb`, alias `--auto-max-mb`). Lore queries are split into
+per-year windows (`--since-year`, default 2018, newest first), so broad topics
 are covered without exceeding a single-download cap. Bugzilla issues keep the
 bug id + URL as their fix pointer; only the reporter's first comment is read
 (transiently, never stored). Repeated or `--loop` runs dedupe by source
@@ -556,7 +594,7 @@ The same catalog runs on a schedule in GitHub Actions
 (`.github/workflows/known-issues.yml`); the rebuilt SQLite store is uploaded
 as a workflow artifact for local use with `--known-issues-db`. CI has no LLM
 credentials, so its artifact carries the issue/fingerprint index; run
-`learn --auto --extract` locally to fill root causes and compact fix pointers.
+`learn --extract` locally to fill root causes and compact fix pointers.
 
 ## Development
 

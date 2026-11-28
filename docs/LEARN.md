@@ -65,27 +65,29 @@ thread only), or a direct search POST with
 `--data-urlencode 'z=results only' '...?q=…&x=m'`. A git clone of
 `https://lore.kernel.org/all/` is the future full-archive adapter.
 
-### Automatic catalog — `learn --auto`
+### Automatic catalog — `learn` (alias `--auto`)
 
-Rather than one command per topic, `--auto` walks
-`dmesg_agent/ingest_catalog.py`: one targeted lore query per high-value fault
-class/subsystem plus kernel.org Bugzilla queries, using the same L1 subsystem
-names as diagnosis.
+With no other source, `learn` walks `dmesg_agent/ingest_catalog.py`: one
+targeted lore query per high-value fault class/subsystem plus kernel.org
+Bugzilla queries, using the same L1 subsystem names as diagnosis.
 
 ```bash
-dmesg-agent learn --auto --auto-max-mb 512
-dmesg-agent learn --auto --extract --max-extract 200
-dmesg-agent learn --auto --loop --interval 86400
+dmesg-agent learn                       # catalog is the default action
+dmesg-agent learn --list                # show ids/queries
+dmesg-agent learn --only iwlwifi        # prefix/substring id match, repeatable
+dmesg-agent learn --extract --max-extract 200
+dmesg-agent learn --loop --interval 86400
 ```
 
-- `--auto-max-mb` caps the total lore download per pass (default 512); each
-  entry also has its own per-year `max_mb`. `--auto-max-queries N` runs a
-  prefix and `--auto-only ID` (repeatable) runs selected entries (useful for
-  smoke tests or topping up one subsystem). Failures are per-entry warnings.
+- `--max-mb` (alias `--auto-max-mb`) caps the total lore download per pass
+  (default 512); each entry also has its own per-year `max_mb`.
+  `--max-queries N` runs a prefix and `--only ID` (repeatable, prefix or
+  substring) runs selected entries. `--list` prints the catalog. Failures are
+  per-entry warnings.
 - Lore's mbox endpoint ignores pagination offsets, so each catalog query is
   split into calendar-year windows (`d:YYYY0101..YYYY1231`) scanned newest
-  first, with `--auto-since-year` (default 2018) as the floor. A window with
-  no matching mail is skipped, not treated as an error.
+  first, with `--since-year` (alias `--auto-since-year`, default 2018) as the
+  floor. A window with no matching mail is skipped, not treated as an error.
 - Bugzilla issues keep the bug id + URL as their fix pointer; only the
   reporter's first comment is read transiently for classification/extraction
   and is never stored. Lore patches carry `Fixes:`/commit trailers instead.
@@ -214,11 +216,11 @@ install behaves exactly as before.
 ## Stage 5: scheduled ingestion
 
 `.github/workflows/known-issues.yml` runs weekly (and on demand): installs the
-package, runs the same `--auto` catalog against lore and Bugzilla (512 MB
-budget), checkpoints the SQLite WAL, and uploads the store as the
-`known-issues-db` artifact. Download it and pass `--known-issues-db`;
+package, runs the same catalog (`learn`, the default action) against lore and
+Bugzilla (512 MB budget), checkpoints the SQLite WAL, and uploads the store as
+the `known-issues-db` artifact. Download it and pass `--known-issues-db`;
 extraction stays local because it needs the configured LLM
-(`dmesg-agent learn --auto --extract`).
+(`dmesg-agent learn --extract`).
 
 ## Still open
 
@@ -226,7 +228,7 @@ extraction stays local because it needs the configured LLM
   incremental `git pull`, instead of per-query downloads.
 - **CI extraction**: the scheduled workflow has no LLM credentials, so it
   ingests issues/fingerprints only; fixes are extracted by a local
-  `learn --auto --extract` (or a future secret-backed workflow step).
+  `learn --extract` (or a future secret-backed workflow step).
 - **SQLite FTS** if the store grows past a few tens of thousands of records
   (`search()` currently scans the compact table).
 - **Multi-label ranking**: a reply quoting an unrelated signature can still
