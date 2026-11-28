@@ -58,6 +58,18 @@ def test_fetch_bugzilla_reads_comment0(monkeypatch):
     assert any("dmesg-agent" in str(v) for v in seen[0].headers.values())
 
 
+def test_fetch_bugzilla_reports_progress(monkeypatch):
+    messages = []
+    _serve(monkeypatch, [
+        ("/rest/bug/5/comment",
+         {"bugs": {"5": {"comments": [{"text": "nvme log"}]}}}),
+        ("/rest/bug?", {"bugs": [{"id": 5, "summary": "nvme timeout"}]}),
+    ])
+    trackers.fetch_bugzilla("https://b", "q", limit=5, progress=messages.append)
+    assert any("1 bug(s) matched" in m for m in messages)
+    assert any("descriptions 1/1" in m for m in messages)
+
+
 def test_fetch_bugzilla_accepts_simple_comment_list(monkeypatch):
     _serve(monkeypatch, [
         ("/rest/bug/9/comment", {"bugs": {"9": [{"text": "ata6 SError"}]}}),
@@ -129,7 +141,7 @@ def test_learn_ingests_tracker_results(monkeypatch, tmp_path):
              "body": "[1.0] nvme nvme0: I/O 12 timeout, reset controller",
              "date": "2024-06-01T00:00:00+00:00"}
     monkeypatch.setattr(learn_mod, "fetch_launchpad",
-                        lambda query, limit=25: [issue])
+                        lambda query, limit=25, progress=None: [issue])
     db = tmp_path / "ki.db"
     code = learn_mod.learn(["--tracker-query", "nvme timeout", "--launchpad",
                             "--db", str(db)])

@@ -366,6 +366,9 @@ def learn(argv: list[str]) -> int:
     failed = False
     client = None
     state = {"extracted": 0, "attempts": 0, "disabled": False}
+
+    def tracker_progress(message: str) -> None:
+        print(f"  {message}", file=sys.stderr, flush=True)
     if args.extract:
         cfg = load_config(provider=args.provider, base_url=args.base_url,
                           model=args.model, api_key=args.api_key)
@@ -382,13 +385,16 @@ def learn(argv: list[str]) -> int:
                 label = target or kind
                 print(f"{kind} search: {args.tracker_query!r} at {label} — waiting…",
                       file=sys.stderr, flush=True)
+                started = time.monotonic()
                 try:
                     if kind == "bugzilla":
                         issues = fetch_bugzilla(target, args.tracker_query,
-                                                limit=args.tracker_limit)
+                                                limit=args.tracker_limit,
+                                                progress=tracker_progress)
                     elif kind == "launchpad":
                         issues = fetch_launchpad(args.tracker_query,
-                                                 limit=args.tracker_limit)
+                                                 limit=args.tracker_limit,
+                                                 progress=tracker_progress)
                     else:
                         issues = fetch_gitlab(
                             target, args.tracker_query, limit=args.tracker_limit,
@@ -398,9 +404,9 @@ def learn(argv: list[str]) -> int:
                     print(f"error: {kind} {label}: {e}", file=sys.stderr)
                     failed = True
                     continue
-                if args.verbose:
-                    print(f"  {len(issues)} issue(s) from {label}",
-                          file=sys.stderr, flush=True)
+                print(f"  {len(issues)} issue(s) from {label} "
+                      f"({time.monotonic() - started:.1f}s)",
+                      file=sys.stderr, flush=True)
                 res = _ingest(store, issues, args, seen, client=client, state=state)
                 total["new"] += res["new"]
                 total["dedup"] += res["dedup"]

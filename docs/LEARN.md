@@ -137,6 +137,9 @@ dmesg-agent learn --tracker-query 'nvme timeout' \
   bug's title/description; searches all statuses.
 - **GitLab**: `/api/v4/projects/<url-encoded path>/issues` with `state=all`
   (open and closed); `--gitlab-token` or `GITLAB_TOKEN` for private projects.
+- Comment/detail requests are sequential (one per matched bug), so progress is
+  printed and a 120 s per-source budget stops the detail phase; remaining
+  Bugzilla bugs stay summary-only and Launchpad bugs stay title-only.
 - A failing source is a per-source warning; the other sources still ingest.
 
 All adapters send a fixed honest User-Agent and only read public APIs.

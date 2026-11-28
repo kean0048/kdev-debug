@@ -11,6 +11,7 @@ No scraping, no user-agent spoofing: a fixed honest User-Agent is sent.
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -54,11 +55,14 @@ def _iso_date(raw) -> str:
 # ------------------------------------------------------------------ bugzilla
 
 def fetch_bugzilla(base: str, query: str, limit: int = 25,
-                   timeout: int = 30, fetch_comments: bool = True) -> list[dict]:
+                   timeout: int = 20, fetch_comments: bool = True,
+                   progress=None, comment_budget: float = 120.0) -> list[dict]:
     """Search a public Bugzilla (kernel.org, Fedora) and read comment 0.
 
     The reporter's first comment usually carries the kernel log excerpt, which
-    is what makes the record classifiable and extractable.
+    is what makes the record classifiable and extractable. Comments are fetched
+    one request per bug, so progress is reported and a time budget stops the
+    detail phase (remaining bugs stay summary-only) instead of stalling.
     """
     base = (base or "").strip().rstrip("/")
     if not base:
@@ -73,8 +77,16 @@ def fetch_bugzilla(base: str, query: str, limit: int = 25,
     if not isinstance(data, dict):
         raise ValueError(f"unexpected bugzilla response from {base}")
     host = urllib.parse.urlparse(base).netloc or base
+    matched = (data.get("bugs") or [])[:max(1, limit)]
+    if progress:
+        progress(f"{len(matched)} bug(s) matched" + (
+            "; fetching the reporter's comment (one request per bug)"
+            if fetch_comments else ""))
+    want_comments = fetch_comments
+    deadline = time.monotonic() + comment_budget
+    interval = max(1, len(matched) // 5)
     out: list[dict] = []
-    for bug in (data.get("bugs") or [])[:max(1, limit)]:
+    for idx, bug in enumerate(matched):
         bid = bug.get("id")
         if not bid:
             continue
@@ -82,24 +94,33 @@ def fetch_bugzilla(base: str, query: str, limit: int = 25,
             f"Product: {bug.get('product')} / {bug.get('component')}",
             f"Status: {bug.get('status')} {bug.get('resolution') or ''}".strip(),
         ]
-        if fetch_comments:
-            try:
-                comments = _get_json(f"{base}/rest/bug/{bid}/comment", timeout=timeout)
-                if isinstance(comments, dict):
-                    by_bug = comments.get("bugs") or {}
-                    entry = by_bug.get(str(bid)) or by_bug.get(bid) or {}
-                    # bugzilla.kernel.org: {"bugs": {"<id>": {"comments": [...]}}}
-                    # older/simple servers: {"bugs": {"<id>": [...]}}
-                    if isinstance(entry, dict):
-                        entries = entry.get("comments") or []
-                    elif isinstance(entry, list):
-                        entries = entry
-                    else:
-                        entries = []
-                    if entries:
-                        body_parts.append(str(entries[0].get("text") or ""))
-            except ValueError:
-                pass  # comment text is optional; keep the summary record
+        if want_comments:
+            if time.monotonic() >= deadline:
+                want_comments = False
+                if progress:
+                    progress("comment budget reached; remaining bugs kept as "
+                             "summary-only records")
+            else:
+                try:
+                    comments = _get_json(f"{base}/rest/bug/{bid}/comment",
+                                         timeout=timeout)
+                    if isinstance(comments, dict):
+                        by_bug = comments.get("bugs") or {}
+                        entry = by_bug.get(str(bid)) or by_bug.get(bid) or {}
+                        # kernel.org: {"bugs": {"<id>": {"comments": [...]}}}
+                        # older/simple servers: {"bugs": {"<id>": [...]}}
+                        if isinstance(entry, dict):
+                            entries = entry.get("comments") or []
+                        elif isinstance(entry, list):
+                            entries = entry
+                        else:
+                            entries = []
+                        if entries:
+                            body_parts.append(str(entries[0].get("text") or ""))
+                except ValueError:
+                    pass  # comment text is optional; keep the summary record
+                if progress and (idx + 1) % interval == 0:
+                    progress(f"descriptions {idx + 1}/{len(matched)}")
         out.append({
             "source": f"bugzilla:{host}",
             "source_id": str(bid),
@@ -113,7 +134,8 @@ def fetch_bugzilla(base: str, query: str, limit: int = 25,
 
 # ----------------------------------------------------------------- launchpad
 
-def fetch_launchpad(query: str, limit: int = 25, timeout: int = 30) -> list[dict]:
+def fetch_launchpad(query: str, limit: int = 25, timeout: int = 20,
+                    progress=None, detail_budget: float = 120.0) -> list[dict]:
     """Search Launchpad bug tasks, then fetch each bug's title/description."""
     params = urllib.parse.urlencode({
         "ws.op": "searchTasks",
@@ -123,10 +145,34 @@ def fetch_launchpad(query: str, limit: int = 25, timeout: int = 30) -> list[dict
     data = _get_json(f"{LAUNCHPAD_API}/bugs?{params}", timeout=timeout)
     if not isinstance(data, dict):
         raise ValueError("unexpected launchpad search response")
+    entries = (data.get("entries") or [])[:max(1, limit)]
+    if progress:
+        progress(f"{len(entries)} bug task(s) matched; fetching "
+                 f"titles/descriptions")
+    deadline = time.monotonic() + detail_budget
+    interval = max(1, len(entries) // 5)
+    stop_details = False
     out: list[dict] = []
-    for task in (data.get("entries") or [])[:max(1, limit)]:
+    for idx, task in enumerate(entries):
         link = task.get("bug_link")
         if not link:
+            continue
+        task_title = str(task.get("title") or "")
+        link_id = str(link).rstrip("/").rsplit("/", 1)[-1]
+        if not stop_details and time.monotonic() >= deadline:
+            stop_details = True
+            if progress:
+                progress("detail budget reached; remaining bugs kept as "
+                         "title-only records")
+        if stop_details:
+            out.append({
+                "source": "launchpad",
+                "source_id": link_id,
+                "url": f"https://bugs.launchpad.net/bugs/{link_id}",
+                "title": " ".join(task_title.split()),
+                "body": task_title,
+                "date": "",
+            })
             continue
         try:
             bug = _get_json(link, timeout=timeout)
@@ -134,8 +180,7 @@ def fetch_launchpad(query: str, limit: int = 25, timeout: int = 30) -> list[dict
             continue
         if not isinstance(bug, dict):
             continue
-        bid = bug.get("id") or str(link).rstrip("/").rsplit("/", 1)[-1]
-        task_title = str(task.get("title") or "")
+        bid = bug.get("id") or link_id
         out.append({
             "source": "launchpad",
             "source_id": str(bid),
@@ -144,6 +189,8 @@ def fetch_launchpad(query: str, limit: int = 25, timeout: int = 30) -> list[dict
             "body": task_title + "\n" + str(bug.get("description") or ""),
             "date": _iso_date(bug.get("date_created")),
         })
+        if progress and (idx + 1) % interval == 0:
+            progress(f"descriptions {idx + 1}/{len(entries)}")
     return out
 
 
