@@ -60,6 +60,7 @@ dmesg-agent eval --live --provider local
 dmesg-agent score --no-tests
 dmesg-agent plugins list
 dmesg-agent cases list
+dmesg-agent learn --mbox lore.mbox --verbose   # ingest community issues (see docs/LEARN.md)
 ```
 
 Every command supports `--help`; the complete option and subcommand reference follows the examples.
@@ -214,8 +215,25 @@ dmesg-agent score [--record] [--live] [--note TEXT] [--no-tests]
 dmesg-agent plugins list
 ```
 
+`learn` — ingest community issues into the known-issue store (command plugin;
+see `docs/LEARN.md`):
+
+```bash
+dmesg-agent learn --mbox lore.mbox [--source lore] [--since 2024-01-01]
+                  [--limit N] [--loop] [--interval SEC] [--db PATH] [--verbose]
+dmesg-agent learn --lore-search 'nvme timeout' [--full-threads]
+                  [--max-download-mb 128] [--limit N] [--verbose]
+                  [--extract --max-extract 25] [--provider NAME] [--base-url URL]
+```
+
+`--lore-search` pulls a search-result mbox directly (POST form) — **no
+message-id needed**; broad queries can be large, so the download is capped by
+`--max-download-mb`. `--extract` asks the configured LLM to fill
+symptom / root_cause / fix / confidence / log_snippets; snippets must be
+verbatim and a fix commit must appear in the source, otherwise it is dropped.
+
 Disable at startup: `DMESG_AGENT_DISABLE_PLUGINS=<module>,...` (module names,
-e.g. `collect_facts,web`).
+e.g. `collect_facts,web,learn`).
 
 `web` — local web UI (command plugin; see `docs/WEB.md`):
 
@@ -422,7 +440,8 @@ The core is a dispatcher; features are plugins under `dmesg_agent/plugins/`
 (seven hook kinds: source, collect, context, deep, post, render, command).
 Removing a plugin file — or disabling one — removes that enhancement without
 breaking the core report; evidence verification and the command whitelist stay
-in the core. The `command` hook is how `dmesg-agent web` is provided.
+in the core. The `command` hook is how `dmesg-agent web` and `dmesg-agent learn`
+are provided.
 
 ```bash
 dmesg-agent plugins list                                   # what is loaded, where
@@ -453,6 +472,38 @@ one, `--job-root PATH` to relocate job storage, `--port N` (0 = auto). See
 
 It is a `command` plugin: `DMESG_AGENT_DISABLE_PLUGINS=web` (or deleting
 `dmesg_agent/plugins/web/`) removes it without touching the CLI.
+
+## Known-issue store (plugin)
+
+`dmesg-agent learn` ingests community issues (lore mbox in stage 1) into a
+small **three-level index** — subsystem (L1) → fault class (L2) → structural
+fingerprint (L3) — built with the *same* `triage`/`playbooks`/`knowledge` rules
+that classify a live dmesg. Only the index + a one-line summary + an external
+URL are stored (~0.6 KB/record); duplicate sources merge by fingerprint.
+
+```bash
+# bulk: one search, no message-id needed (POST form under the hood)
+dmesg-agent learn --lore-search 'nvme timeout' --limit 1000 --verbose
+dmesg-agent learn --lore-search 'NV_ERR_NO_MEMORY' --full-threads --max-download-mb 64
+
+# LLM extraction (stage 2): fill root_cause / fix / log_snippets
+dmesg-agent learn --lore-search 'nvmet-tcp TLS handshake timeout' \
+  --extract --max-extract 25 --verbose
+
+# local mbox / thread mbox
+dmesg-agent learn --mbox lore.mbox.gz --verbose
+dmesg-agent learn --mbox lore.mbox.gz --since 2024-01-01 --limit 1000
+dmesg-agent learn --mbox lore.mbox.gz --loop --interval 3600   # continuous update
+```
+
+`.mbox.gz` is supported; HTML pages are rejected with a clear error. Ingest
+drops release announcements, stable-review cover letters (000/816), Yocto/OE
+version bumps, GIT PULL/ANNOUNCE/CVE digests, and pure discussion with only a
+generic signature. Patch-series versions (v1/v2/v3 + `Re:`) and cross-source
+duplicates merge into one record with multiple URLs. See `docs/LEARN.md`.
+
+Diagnosis-time recall (`known_issue_lookup` context plugin) and the
+bugzilla/launchpad/GitLab/Fedora adapters are the next stages.
 
 ## Development
 
