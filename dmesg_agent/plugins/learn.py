@@ -27,6 +27,7 @@ from pathlib import Path
 from .. import __version__
 from ..config import load_config
 from ..extractor import extract_issue
+from ..ingest_catalog import CATALOG, DEFAULT_TRACKER_BASE, selected_entries
 from ..knownissues import (KnownIssueStore, classify_text, is_noise_issue,
                            series_key as series_key_for)
 from ..llm import Client, LLMError
@@ -238,6 +239,20 @@ def build_parser() -> argparse.ArgumentParser:
                    help="max issues per tracker source (default 25)")
     p.add_argument("--gitlab-token", default=None,
                    help="GitLab token for private projects (or GITLAB_TOKEN)")
+    p.add_argument("--auto", action="store_true",
+                   help="run the built-in catalog: targeted lore + Bugzilla "
+                        "queries per subsystem, including fix threads")
+    p.add_argument("--auto-max-mb", type=int, default=512, metavar="MB",
+                   help="total lore download budget per --auto pass "
+                        "(0 = unlimited; default 512)")
+    p.add_argument("--auto-max-queries", type=int, default=0, metavar="N",
+                   help="max catalog entries per --auto pass (0 = all)")
+    p.add_argument("--auto-only", metavar="ID", action="append", default=[],
+                   help="with --auto, run only these catalog entry ids "
+                        "(repeatable)")
+    p.add_argument("--auto-since-year", type=int, default=2018, metavar="YYYY",
+                   help="with --auto, ingest per-year lore windows from YYYY to "
+                        "the current year, newest first (default 2018)")
     p.add_argument("--max-download-mb", type=int, default=128,
                    help="cap for one lore search mbox (default 128 MB)")
     p.add_argument("--source", default="lore", help="source label (default: lore)")
@@ -260,6 +275,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="seconds between --loop scans (default 3600)")
     p.add_argument("--verbose", action="store_true", help="log each classified issue")
     return p
+
+
+def _auto_years(args) -> range:
+    """Years for --auto lore windows, newest first."""
+    end = datetime.now().year
+    start = min(int(getattr(args, "auto_since_year", 2018)), end)
+    return range(end, start - 1, -1)
 
 
 def _maybe_extract(store, issue: dict, client, args, state: dict) -> None:
@@ -351,10 +373,12 @@ def _ingest(store: KnownIssueStore, issues: list[dict], args, seen: set[str],
 def learn(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     trackers_requested = bool(args.bugzilla or args.launchpad or args.gitlab)
-    if not args.mbox and not args.lore_search and not trackers_requested:
-        print("error: no input — pass --mbox /path/to/lore.mbox, "
-              "--lore-search 'query' (bulk, no message-id needed), or a REST "
-              "tracker (--bugzilla/--launchpad/--gitlab with --tracker-query)",
+    if not args.auto and not args.mbox and not args.lore_search \
+            and not trackers_requested:
+        print("error: no input — pass --auto (built-in catalog), "
+              "--mbox /path/to/lore.mbox, --lore-search 'query' (bulk, no "
+              "message-id needed), or a REST tracker "
+              "(--bugzilla/--launchpad/--gitlab with --tracker-query)",
               file=sys.stderr)
         return 2
     if trackers_requested and not args.tracker_query:
@@ -378,6 +402,14 @@ def learn(argv: list[str]) -> int:
     try:
         while True:
             total = {"new": 0, "dedup": 0, "filtered": 0}
+
+            def accumulate(issues: list[dict]) -> dict:
+                res = _ingest(store, issues, args, seen, client=client, state=state)
+                total["new"] += res["new"]
+                total["dedup"] += res["dedup"]
+                total["filtered"] += res["filtered"]
+                return res
+
             tracker_jobs = ([("bugzilla", base) for base in args.bugzilla]
                             + ([("launchpad", "")] if args.launchpad else [])
                             + [("gitlab", project) for project in args.gitlab])
@@ -407,10 +439,108 @@ def learn(argv: list[str]) -> int:
                 print(f"  {len(issues)} issue(s) from {label} "
                       f"({time.monotonic() - started:.1f}s)",
                       file=sys.stderr, flush=True)
-                res = _ingest(store, issues, args, seen, client=client, state=state)
-                total["new"] += res["new"]
-                total["dedup"] += res["dedup"]
-                total["filtered"] += res["filtered"]
+                accumulate(issues)
+            if args.auto:
+                only = set(args.auto_only) or None
+                if only:
+                    unknown = only - {entry["id"] for entry in CATALOG}
+                    if unknown:
+                        print(f"warning: unknown catalog id(s): "
+                              f"{', '.join(sorted(unknown))}", file=sys.stderr)
+                entries = selected_entries(args.auto_max_queries, only)
+                if not entries:
+                    print("error: --auto-only matched no catalog entry",
+                          file=sys.stderr)
+                    failed = True
+                budget = args.auto_max_mb * 1024 * 1024 if args.auto_max_mb else None
+                used = 0
+                auto_new = 0
+                auto_entries = 0
+                auto_errors = 0
+                for idx, entry in enumerate(entries, 1):
+                    if budget is not None and used >= budget:
+                        print(f"  auto: {args.auto_max_mb} MB budget spent; "
+                              f"skipping the remaining catalog entries",
+                              file=sys.stderr)
+                        break
+                    auto_entries += 1
+                    print(f"[auto {idx}/{len(entries)}] {entry['id']} "
+                          f"({entry['subsystem']})", file=sys.stderr, flush=True)
+                    if entry.get("lore"):
+                        default_cap = int(entry.get("max_mb", 32))
+                        last_mb = [0]
+
+                        def _auto_progress(downloaded: int, _last=last_mb) -> None:
+                            mb = downloaded // (1024 * 1024)
+                            if mb >= _last[0] + 8:
+                                _last[0] = mb
+                                print(f"  downloaded {mb} MB…", file=sys.stderr,
+                                      flush=True)
+
+                        # Year windows keep broad queries below the per-download
+                        # cap (lore's mbox endpoint ignores pagination offsets)
+                        # and spend the budget newest-first.
+                        for year in _auto_years(args):
+                            if budget is not None and used >= budget:
+                                break
+                            cap_mb = default_cap
+                            if budget is not None:
+                                cap_mb = min(default_cap, max(
+                                    1, int((budget - used) // (1024 * 1024))))
+                            query = f"{entry['lore']} d:{year}0101..{year}1231"
+                            last_mb[0] = 0
+                            print(f"  lore {year}: {entry['lore']!r} "
+                                  f"(≤ {cap_mb} MB)", file=sys.stderr, flush=True)
+                            try:
+                                tmp = fetch_lore_search(
+                                    query, full_threads=args.full_threads,
+                                    max_mb=cap_mb, progress=_auto_progress)
+                            except ValueError as e:
+                                message = str(e)
+                                if "HTTP 404" in message or "empty response" in message:
+                                    continue  # no matching mail in that year
+                                print(f"warning: auto {entry['id']} {year}: "
+                                      f"{e}", file=sys.stderr)
+                                auto_errors += 1
+                                if budget is not None and "exceeds" in message:
+                                    used += cap_mb * 1024 * 1024
+                                continue
+                            try:
+                                size = Path(tmp).stat().st_size
+                            except OSError:
+                                size = 0
+                            used += size
+                            print(f"  fetched {size / (1024 * 1024):.1f} MB, "
+                                  f"parsing…", file=sys.stderr, flush=True)
+                            try:
+                                issues = iter_mbox(tmp, source=args.source)
+                            except ValueError as e:
+                                print(f"warning: auto {entry['id']} {year}: "
+                                      f"{e}", file=sys.stderr)
+                                auto_errors += 1
+                            else:
+                                auto_new += accumulate(issues)["new"]
+                            finally:
+                                Path(tmp).unlink(missing_ok=True)
+                    if entry.get("bugzilla"):
+                        base = entry.get("tracker_base", DEFAULT_TRACKER_BASE)
+                        print(f"  bugzilla: {entry['bugzilla']!r} at {base}",
+                              file=sys.stderr, flush=True)
+                        try:
+                            issues = fetch_bugzilla(
+                                base, entry["bugzilla"],
+                                limit=entry.get("tracker_limit", 8),
+                                progress=tracker_progress)
+                        except ValueError as e:
+                            print(f"warning: auto {entry['id']}: {e}",
+                                  file=sys.stderr)
+                            auto_errors += 1
+                        else:
+                            auto_new += accumulate(issues)["new"]
+                print(f"auto: {auto_entries} catalog entr(ies), "
+                      f"{used / (1024 * 1024):.1f} MB lore downloaded, "
+                      f"+{auto_new} new issue(s), {auto_errors} source "
+                      f"error(s)", file=sys.stderr, flush=True)
             paths = list(args.mbox)
             temps: list[str] = []
             try:
@@ -455,10 +585,7 @@ def learn(argv: list[str]) -> int:
                     if args.verbose:
                         print(f"  {len(issues)} message(s) parsed from {path}",
                               file=sys.stderr, flush=True)
-                    res = _ingest(store, issues, args, seen, client=client, state=state)
-                    total["new"] += res["new"]
-                    total["dedup"] += res["dedup"]
-                    total["filtered"] += res["filtered"]
+                    accumulate(issues)
             finally:
                 for tmp in temps:
                     Path(tmp).unlink(missing_ok=True)

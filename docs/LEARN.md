@@ -60,6 +60,37 @@ thread only), or a direct search POST with
 `--data-urlencode 'z=results only' '...?q=…&x=m'`. A git clone of
 `https://lore.kernel.org/all/` is the future full-archive adapter.
 
+### Automatic catalog — `learn --auto`
+
+Rather than one command per topic, `--auto` walks
+`dmesg_agent/ingest_catalog.py`: one targeted lore query per high-value fault
+class/subsystem plus kernel.org Bugzilla queries, using the same L1 subsystem
+names as diagnosis.
+
+```bash
+dmesg-agent learn --auto --auto-max-mb 512
+dmesg-agent learn --auto --extract --max-extract 200
+dmesg-agent learn --auto --loop --interval 86400
+```
+
+- `--auto-max-mb` caps the total lore download per pass (default 512); each
+  entry also has its own per-year `max_mb`. `--auto-max-queries N` runs a
+  prefix and `--auto-only ID` (repeatable) runs selected entries (useful for
+  smoke tests or topping up one subsystem). Failures are per-entry warnings.
+- Lore's mbox endpoint ignores pagination offsets, so each catalog query is
+  split into calendar-year windows (`d:YYYY0101..YYYY1231`) scanned newest
+  first, with `--auto-since-year` (default 2018) as the floor. A window with
+  no matching mail is skipped, not treated as an error.
+- Resolved Bugzilla bugs keep their whole comment thread (bounded), so
+  "fixed by commit …" reaches the extractor; lore patches carry `Fixes:`
+  trailers. Launchpad/GitLab remain explicit `--tracker-query` sources.
+- Extraction stays inline and capped per run (`--max-extract`); repeated or
+  `--loop` runs re-see pending records and fill gaps, while source-id and
+  fingerprint dedup prevent duplicates. Fix records therefore accumulate over
+  runs without a separate state machine.
+- `tests/test_ingest_catalog.py` pins the main subsystem coverage and entry
+  shape.
+
 ### Quality filters and dedup
 
 `learn` drops: release announcements, stable-review cover letters (000/816),
@@ -175,15 +206,19 @@ install behaves exactly as before.
 ## Stage 5: scheduled ingestion
 
 `.github/workflows/known-issues.yml` runs weekly (and on demand): installs the
-package, runs a small query set against lore and Bugzilla, checkpoints the
-SQLite WAL, and uploads the store as the `known-issues-db` artifact. Download
-it and pass `--known-issues-db`; extraction stays local because it needs the
-configured LLM.
+package, runs the same `--auto` catalog against lore and Bugzilla (512 MB
+budget), checkpoints the SQLite WAL, and uploads the store as the
+`known-issues-db` artifact. Download it and pass `--known-issues-db`;
+extraction stays local because it needs the configured LLM
+(`dmesg-agent learn --auto --extract`).
 
 ## Still open
 
 - **lore full-archive adapter**: `git clone https://lore.kernel.org/all/` plus
   incremental `git pull`, instead of per-query downloads.
+- **CI extraction**: the scheduled workflow has no LLM credentials, so it
+  ingests issues/fingerprints only; fixes are extracted by a local
+  `learn --auto --extract` (or a future secret-backed workflow step).
 - **SQLite FTS** if the store grows past a few tens of thousands of records
   (`search()` currently scans the compact table).
 - **Multi-label ranking**: a reply quoting an unrelated signature can still

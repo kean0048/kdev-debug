@@ -21,33 +21,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install .
-      - name: Ingest lore searches
+      - name: Ingest catalog (lore + Bugzilla)
         env:
           DB: ${{ runner.temp }}/known-issues.db
         run: |
-          queries=(
-            "nvme timeout"
-            "nvmet-tcp TLS handshake timeout"
-            "ata error failed command"
-            "amdgpu ring timeout"
-            "soft lockup"
-            "Out of memory: Killed process"
-          )
-          for query in "${queries[@]}"; do
-            dmesg-agent learn --lore-search "$query" --db "$DB" \
-              --limit 500 --max-download-mb 64 \
-              || echo "warn: lore query failed: $query"
-          done
-      - name: Ingest Bugzilla (kernel.org)
-        env:
-          DB: ${{ runner.temp }}/known-issues.db
-        run: |
-          dmesg-agent learn --tracker-query "nvme timeout" \
-            --bugzilla https://bugzilla.kernel.org --tracker-limit 50 --db "$DB" \
-            || echo "warn: bugzilla source failed"
-          dmesg-agent learn --tracker-query "Out of memory killed process" \
-            --bugzilla https://bugzilla.kernel.org --tracker-limit 50 --db "$DB" \
-            || echo "warn: bugzilla source failed"
+          dmesg-agent learn --auto --db "$DB" \
+            --auto-max-mb 512 --limit 800 \
+            || echo "warn: auto ingest had failures"
       - name: Summarize
         env:
           DB: ${{ runner.temp }}/known-issues.db

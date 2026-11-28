@@ -230,6 +230,8 @@ dmesg-agent learn --lore-search 'nvme timeout' [--full-threads]
 dmesg-agent learn --tracker-query 'nvme timeout'
                   [--bugzilla BASE]... [--launchpad] [--gitlab PROJECT_URL]...
                   [--tracker-limit 25] [--gitlab-token TOKEN]
+dmesg-agent learn --auto [--auto-max-mb 512] [--auto-max-queries N]
+                  [--limit N] [--extract --max-extract 25] [--loop]
 ```
 
 `--lore-search` pulls a search-result mbox directly (POST form) — **no
@@ -510,6 +512,12 @@ dmesg-agent learn --tracker-query 'nvme timeout' \
   --launchpad \
   --gitlab https://gitlab.gnome.org/GNOME/mutter \
   --tracker-limit 25
+
+# automatic catalog: targeted lore + Bugzilla queries for the common fault
+# classes (storage/memory/gpu/network/usb/firmware/hardware/locking)
+dmesg-agent learn --auto --auto-max-mb 512
+dmesg-agent learn --auto --extract --max-extract 200   # fill root cause/fix
+dmesg-agent learn --auto --loop --interval 86400       # keep it current
 ```
 
 `.mbox.gz` is supported; HTML pages are rejected with a clear error. Ingest
@@ -530,7 +538,17 @@ the model's `known_issue_usage` verdict (applied / considered / rejected);
 zero matches — or a missing store — are stated explicitly, so you can tell
 whether the community store influenced a diagnosis.
 
-The ingest sources run on a schedule in GitHub Actions
+`learn --auto` walks the built-in catalog (`dmesg_agent/ingest_catalog.py`)
+instead of requiring per-topic commands: one targeted lore query per common
+fault class/subsystem plus kernel.org Bugzilla queries, under a global
+download budget (`--auto-max-mb`). Lore queries are split into per-year
+windows (`--auto-since-year`, default 2018, newest first), so broad topics
+are covered without exceeding a single-download cap. Resolved Bugzilla bugs
+keep their whole comment thread so fix/backport commit hashes reach the
+extractor. Repeated or `--loop` runs dedupe by source id/fingerprint and keep
+extracting pending records, so coverage and fix records accumulate.
+
+The same catalog runs on a schedule in GitHub Actions
 (`.github/workflows/known-issues.yml`); the rebuilt SQLite store is uploaded
 as a workflow artifact for local use with `--known-issues-db`.
 

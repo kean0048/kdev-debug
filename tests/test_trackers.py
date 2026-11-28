@@ -70,6 +70,21 @@ def test_fetch_bugzilla_reports_progress(monkeypatch):
     assert any("descriptions 1/1" in m for m in messages)
 
 
+def test_fetch_bugzilla_fixed_bug_reads_the_whole_thread(monkeypatch):
+    _serve(monkeypatch, [
+        ("/rest/bug/7/comment", {"bugs": {"7": {"comments": [
+            {"text": "reporter description"},
+            {"text": "Fixed by commit deadbeef1234 upstream."}]}}}),
+        ("/rest/bug?", {"bugs": [{"id": 7, "summary": "nvme timeout",
+                                  "status": "RESOLVED",
+                                  "resolution": "FIXED"}]}),
+    ])
+    issues = trackers.fetch_bugzilla("https://b", "nvme timeout")
+    body = issues[0]["body"]
+    assert "reporter description" in body
+    assert "Fixed by commit deadbeef1234" in body
+
+
 def test_fetch_bugzilla_accepts_simple_comment_list(monkeypatch):
     _serve(monkeypatch, [
         ("/rest/bug/9/comment", {"bugs": {"9": [{"text": "ata6 SError"}]}}),
