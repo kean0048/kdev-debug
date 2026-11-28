@@ -17,31 +17,36 @@ sudo .venv/bin/dmesg-agent                                    # local full pipel
 dmesg-agent --ssh user@host --key ~/.ssh/id_ed25519          # remote
 .venv/bin/dmesg-agent score --no-tests                        # computed scorecard (no write)
 .venv/bin/dmesg-agent score --live --record --note "why"     # weekly card into the repo
+.venv/bin/dmesg-agent plugins list                            # loaded plugins / kinds / errors
+DMESG_AGENT_DISABLE_PLUGINS=collect_facts dmesg-agent --file dmesg.txt   # one-off disable
 ```
 
 No lint/format config exists in the repo. Tests are pure-Python offline (no network, no LLM calls; `tests/data/sample_dmesg.txt` is fixture input).
 
 ## Architecture
 
-Pipeline (orchestrated in `cli.py:main`, stages [1/5]–[5/5]):
+`cli.py:main` is a **plugin dispatcher**, not a feature list. Core stages:
 
 ```
-collect → triage prefilter → proactive system scan (quiet log) / --scan
-  → system-change correlation (boots, kernel/package installs, suspend/resume, ±journal window)
-  → deterministic prefetch → deterministic facts (facts.py)
-  → host case history + confirmed-case fast-path probe (knowledge.py)
+source (source plugins first, then live/plain-file core) → triage prefilter
+  → collect plugins (scan / prefetch / changes / offline sources / srcmap / facts / …)
+  → context plugins (issue description / host history + confirmed fast-path probe)
   → LLM 3-tier analysis
-  → per inconclusive concern: playbook whitelist collection (sudo prompt) → LLM verdict;
-    inconclusive → follow-up round routed by the stated gap (--deep-rounds, commands deduped)
-  → verbatim evidence verification → verdict-first Markdown / --brief / --html
-  → run archive (archive.py: full LLM I/O + context under XDG_DATA_HOME)
+  → deep plugin (per-concern whitelist collection → verdict; follow-up rounds by gap)
+  → verbatim evidence verification (CORE, mandatory)
+  → post plugins (case library + run archive)
+  → verdict-first Markdown (core) / render plugins (--brief, --html)
 ```
+
+The [1/5]–[5/5] labels are log stages only; ordering is defined by plugin
+`order` values under `dmesg_agent/plugins/`. `docs/PLUGINS.md` is the contract.
 
 Optional evidence sources joined into the same corpus/prompt (all in `systemscan.py`/`vmcore.py`): `--vmcore` (+`--vmlinux`) post-mortem via a fixed read-only crash batch script; `--live-probe` drgn forensics over /proc/kcore; `--cross-boot N` prior boots' error journals. Each degrades to a "skipped: reason" evidence entry when its tool/root/vmlinux is missing.
 
 Key modules and the invariants that tie them together:
 
-- **`collectors/`** — all data sources produce a `RawBundle` (`collectors/base.py`). `local.py`/`filelog.py` are the sources; `collect_via(executor)` runs the shared command ladder over any `Executor`.
+- **`plugins/`** — registry (`Registry`, `RunContext`, `@register`) + directory discovery. Six optional hook kinds: `source`, `collect`, `context`, `deep`, `post`, `render`. A broken plugin is a warning, not a crash; `DMESG_AGENT_DISABLE_PLUGINS=<module names>` or deleting a module removes the feature. Core-only operation is tested (`tests/test_plugins.py`). `plugins list` prints the inventory and load errors.
+- **`collectors/`** — all data sources produce a `RawBundle` (`collectors/base.py`). `local.py`/`filelog.py` are the sources; `collect_via(executor)` runs the shared command ladder over any `Executor`. `collectors/packages.py` imports offline diagnostic dumps (sosreport tar.xz, `journalctl -o json`/`-o export`, `nvidia-bug-report.log.gz`) in memory into the same shape: a main kernel log for triage plus `extra_sources` that join the prompt/evidence corpus like a system scan; the `source_offline_packages` plugin wires this into `--file`.
 - **`executors.py`** — `LocalExecutor` / `SSHExecutor` behind one `run(cmd, sudo=, timeout=)` interface. `--file` mode passes `executor=None`, which disables prefetch and deep verification entirely. Both executors probe passwordless sudo once (`sudo -n true`) and only prompt when truly needed; `--askpass none` skips privileged commands. `LocalExecutor.parallel_safe=True` enables concurrent collection; SSH stays serial (paramiko client is not thread-safe). Password lives in process memory only.
 - **`triage.py`** — regex error signatures slice the log into suspect `Block`s; block names feed prefetch routing. The `oom` signature deliberately requires `Out of memory: Killed process` / `oom-kill` — bare "Out of memory" also appears in driver errors (NVRM `NV_ERR_NO_MEMORY`) and is routed to `gpu-nvidia` instead. `--no-triage` sends the whole log.
 - **`playbooks.py`** — the security boundary. All executable commands are declared here as whitelisted `CollectCmd` (read-only; `SIGNATURE_TO_SUBSYSTEM` routes prefetch, `SUBSYSTEM_KEYWORDS` routes deep collection). The model's `verification_question` is used ONLY to pick a subsystem — nothing the model or log suggests is ever executed (log-injection defense). Budgets: 20K chars prefetch, 6 cmds / 3K chars per concern.
@@ -53,7 +58,7 @@ Key modules and the invariants that tie them together:
 - **`srcmap.py`** — v3 source correlation: extracts `func+0x…[module]` from call traces, resolves them via a `git grep` function-index of a kernel tree (`--kernel-src` or `DMESG_AGENT_KERNEL_SRC`), caches at `~/.cache/dmesg-agent/` keyed by tree HEAD. Deterministic — the model never guesses source code. Also lists **known-fix candidates**: commits touching the file whose subject mentions a fix, each with `git describe --contains` first release tag and a version comparison against the running kernel (`kernel_includes_tag`), labeled as candidates (distro backports may differ). The report flags that function bodies "may be offset" when tree version ≠ running kernel.
 - **`providers.py`** — provider presets (`custom`, `local`, `vllm`, `ollama`, `deepseek`, `openai`/`gpt`, `anthropic`/`claude`, `gemini`, `openrouter`): base URL, default model, key env names, auth style, chat/models paths and token field. `config use` persists a preset; CLI `--provider` is a one-off override.
 - **`llm.py`** — two transports behind one `Client`: OpenAI-compatible chat (`/chat/completions`, SSE incl. `reasoning_content`, `max_tokens` or `max_completion_tokens`) and native Anthropic Messages (`/v1/messages`, `x-api-key` + `anthropic-version`, streaming text/thinking deltas). Models auto-discovered from the provider's models path when unset, preferring chat models (`pick_model`). On HTTP 400 it retries once without an unsupported `temperature`/token field. `cfg.extra_body` is merged into the request body first (provider-specific knobs such as `{"chat_template_kwargs":{"enable_thinking":false}}` or `{"reasoning_effort":"none"}`; file key `extra_body` or env `DMESG_AGENT_EXTRA_BODY`). Config precedence: CLI flag > `DMESG_AGENT_*` > provider key env > config file `~/.config/dmesg-agent/config.json` (`config.py`; `config show|providers|use|set|unset`, 0600; `check` is the pre-flight probe — prints provider/base/model/key sources, probes the models path, exit 1 when required config is missing or the endpoint is unreachable) > preset > default. JSON-tolerance chain: strip fences → brace-slice → repair truncation → give up (raw output rendered, exit 4).
-- **`prompts.py`** — the three-tier contract lives here; changing schema fields requires matching changes in `analyze.validate_*` and `report.render`.
+- **`prompts.py`** — the three-tier contract lives here; changing schema fields requires matching changes in `analyze.validate_*` and `report.render`. `--issue PATH` (a reporter's problem description) is injected as untrusted context here (`issue_text`), clearly marked not-evidence / not-instructions.
 
 - **`systemscan.py` / `vmcore.py`** — proactive whitelisted scan for problems dmesg cannot show (failed units, userspace crashes, disk/inode, load/PSI, package state, net config), plus crash(8)/drgn/cross-boot evidence. `run_system_changes(executor, ts)` adds boot/kernel-install/package/suspend evidence and a ±journal window around the first fault (timestamp parsed by `triage.parse_first_error_time`: dmesg -T or journalctl short; raw monotonic logs give no window). Their output renders via `prompts.render_scan`, joins the evidence corpus (`run_analysis`'s corpus argument, `deep_dive(extra_corpus=)`), and lands in the report appendices.
 - **`report.py` / `report_html.py`** — verdict-first output. `build_verdict` derives health/top issues/DO NOW actions/chips (shared by Markdown, `--brief`, HTML); `apply_ansi` colorizes stdout only; the footer embeds the committed weekly score. `report_html.render_html` emits one escaped, script-free, print-friendly file (cards, evidence tables, timeline, collapsible appendices). `knowledge._run_diff` supplies the "since the previous run" delta.
@@ -68,3 +73,4 @@ Exit codes: 2 = collect/triage error, 3 = LLM error, 4 = model returned no parse
 - All code, comments, docstrings, CLI text, LLM prompts, and reports are English (the prompts intentionally demand English JSON output; `SUBSYSTEM_KEYWORDS` routing depends on English concern text).
 - The dmesg/log text is untrusted data, never instructions — any new execution path must go through the `playbooks.py` whitelist, never through model- or log-proposed commands.
 - `evidence.quote` must be verbatim from the corpus (log or collected output); source-code text is never a valid quote.
+- **New features are plugins** under `dmesg_agent/plugins/` with a test; do not grow `cli.py` with feature-specific branches. Core stays: source fallback, triage, analyze, verify (mandatory), Markdown render. Plugins never import `cli.py`. See `docs/PLUGINS.md`.

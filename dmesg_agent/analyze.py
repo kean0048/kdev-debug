@@ -83,13 +83,15 @@ def validate_analysis(result: dict, corpus_lines: list[str]) -> list[str]:
 def run_analysis(client, bundle: RawBundle, blocks_text: str, prefetch_text: str,
                  log_lines: list[str], source_text: str = "", retries: int = 1,
                  scan_text: str = "", make_stream=None,
-                 history_text: str = "", facts_text: str = "") -> tuple[dict | None, str]:
+                 history_text: str = "", facts_text: str = "",
+                 issue_text: str = "") -> tuple[dict | None, str]:
     """First-pass analysis; on validation failure, feed the exact error list back
     for one retry (sashiko feedback-retry). log_lines doubles as the evidence
     corpus: pass log lines plus any collected scan/prefetch output lines so
     evidence quoted from collections is valid."""
     msgs = build_messages(bundle, blocks_text, prefetch_text, source_text, scan_text,
-                          history_text=history_text, facts_text=facts_text)
+                          history_text=history_text, facts_text=facts_text,
+                          issue_text=issue_text)
     result, answer = None, ""
     for attempt in range(retries + 1):
         cb = make_stream(f"analysis attempt {attempt + 1}") if make_stream else None

@@ -6,12 +6,13 @@ import argparse
 import json
 import os
 import sys
+import tarfile
 from pathlib import Path
 
 from . import __version__
-from .analyze import deep_dive, run_analysis
-from .archive import (RecordingClient, build_archive, new_run_uuid,
-                      write_run_archive)
+from . import plugins as plugin_framework
+from .analyze import run_analysis
+from .archive import RecordingClient, new_run_uuid
 from .collectors.base import RawBundle, collect_via
 from .collectors.filelog import collect_file
 from .config import (
@@ -25,23 +26,15 @@ from .config import (
 )
 from .errors import CollectError
 from .executors import Executor, LocalExecutor, SSHExecutor
-from .facts import extract_facts, render_facts
-from .knowledge import (DEFAULT_FUZZY, KnowledgeError, cases_main, find_confirmed_cases,
-                        host_history, log_fingerprint, record_run, resolve_db_path)
+from .knowledge import DEFAULT_FUZZY, cases_main
 from .llm import Client, LLMError, pick_model
 from .passwds import PassResolver
+from .plugins import RunContext
 from .providers import get_provider, provider_choices, provider_table
-from .srcmap import SrcMap, extract_symbols
-from .systemscan import (run_cross_boot, run_live_probe, run_system_changes,
-                         run_system_scan)
-from .playbooks import run_prefetch
-from .prompts import render_history, render_prefetch, render_scan
-from .report import apply_ansi, render, render_brief
-from .report_html import render_html
+from .report import apply_ansi, render
 from .scorecard import format_for_check, latest_score, score_main
-from .triage import Block, find_blocks, parse_first_error_time, render_blocks
+from .triage import Block, find_blocks, render_blocks
 from .verify import VerifySummary, verify_result
-from .vmcore import analyze_vmcore
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,8 +45,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     src = p.add_mutually_exclusive_group()
     src.add_argument("--ssh", metavar="USER@HOST", help="collect from a remote machine over SSH")
-    src.add_argument("--file", metavar="PATH", help="analyze an offline dmesg/kernel log file "
-                                                    "(.gz supported, '-' for stdin)")
+    src.add_argument("--file", metavar="PATH", help="analyze an offline log: dmesg/kern.log "
+                        "(.gz, '-' for stdin), journalctl -o json/export, nvidia-bug-report.log[.gz], "
+                        "or a sosreport tarball (.tar/.tar.gz/.tar.xz)")
+    p.add_argument("--issue", metavar="PATH", help="a text file with the reporter's problem "
+                                                   "description (Jira body, etc.); context only — "
+                                                   "never treated as evidence or instructions")
     p.add_argument("--boot", choices=["now", "previous"], default="now", help="which boot's log to collect")
     p.add_argument("--port", type=int, default=22)
     p.add_argument("--user", help="SSH user name (when --ssh has no user@ prefix)")
@@ -442,10 +439,56 @@ def _eval_main(argv: list[str]) -> int:
     spec.loader.exec_module(mod)
     return mod.main(argv)
 
+def _plugins_main(argv: list[str]) -> int:
+    """`dmesg-agent plugins list`: show what is loaded (and what failed)."""
+    registry = plugin_framework.load_plugins()
+    if argv and argv[0] not in ("list", "ls"):
+        print("usage: dmesg-agent plugins list", file=sys.stderr)
+        return 2
+    metas = registry.all_meta()
+    current = None
+    for meta in metas:
+        if meta.kind != current:
+            current = meta.kind
+            print(f"{meta.kind}:")
+        print(f"  {meta.name:<26} order={meta.order:<4} {meta.module}")
+        if meta.description:
+            print(f"    {meta.description}")
+    if not metas:
+        print("no plugins loaded")
+    disabled = registry.disabled()
+    if disabled:
+        print(f"\ndisabled via DMESG_AGENT_DISABLE_PLUGINS: {', '.join(sorted(disabled))}")
+    if registry.errors:
+        print("\nload errors:")
+        for err in registry.errors:
+            print(f"  - {err}")
+    return 0
+
+
+def _render_markdown(ctx: RunContext) -> str:
+    return render(ctx.result, ctx.bundle, ctx.summary, ctx.blocks,
+                  raw_text=ctx.answer, prefetch_used=bool(ctx.prefetch_text),
+                  deep_used=ctx.deep_used, source_text=ctx.source_text,
+                  srcmap_version=ctx.srcmap_version, scan_used=bool(ctx.scan_text),
+                  scan_text=ctx.scan_text, changes_text=ctx.changes_text)
+
+
+def _plugin_name(fn) -> str:
+    meta = getattr(fn, "_plugin_meta", None)
+    return getattr(meta, "name", getattr(fn, "__name__", "?"))
+
+
+def _warn_plugin(fn, kind: str, e: Exception) -> None:
+    """A plugin bug is a warning, never a core crash."""
+    print(f"warning: {kind} plugin {_plugin_name(fn)} failed "
+          f"({type(e).__name__}: {e}); continuing", file=sys.stderr)
+
 
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
+    argv = list(argv)
     if argv and argv[0] == "config":
         return _config_main(argv[1:])
     if argv and argv[0] == "check":
@@ -456,270 +499,202 @@ def main(argv: list[str] | None = None) -> int:
         return cases_main(argv[1:])
     if argv and argv[0] == "score":
         return score_main(argv[1:])
+    if argv and argv[0] == "plugins":
+        return _plugins_main(argv[1:])
+
     args = build_parser().parse_args(argv)
+    registry = plugin_framework.load_plugins()
     log = _Log(args.verbose)
     resolver = PassResolver(args.askpass)
+    ctx = RunContext(args=args, argv=argv, resolver=resolver, log=log)
 
-    executor: Executor | None = None
+    # [1/5] data source: optional source plugins, then the core live/plain-file source
     try:
-        executor = _make_executor(args, resolver)
         if args.file:
-            log("[1/5]", f"reading file {args.file}")
-            bundle = collect_file(args.file, kernel=args.kernel, distro=args.distro)
+            for source in registry.get("source"):
+                try:
+                    if source(ctx):
+                        break
+                except CollectError:
+                    raise
+                except Exception as e:
+                    _warn_plugin(source, "source", e)
+            if ctx.bundle is None:
+                if args.file != "-" and tarfile.is_tarfile(args.file):
+                    raise CollectError(
+                        f"{args.file} is a tarball but no source plugin claimed it; "
+                        f"the offline-package plugin (plugins/source_offline_packages.py) "
+                        f"is not installed — extract a kernel log or restore that plugin")
+                log("[1/5]", f"reading file {args.file}")
+                ctx.bundle = collect_file(args.file, kernel=args.kernel,
+                                          distro=args.distro)
         else:
             if args.ssh:
                 log("[1/5]", f"SSH connect {args.ssh}")
             log("[1/5]", f"collecting (boot={args.boot})")
-            bundle = collect_via(executor, boot=args.boot)
+            ctx.executor = _make_executor(args, resolver)
+            ctx.bundle = collect_via(ctx.executor, boot=args.boot)
     except CollectError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    lines = bundle.dmesg_text.splitlines()
+    bundle = ctx.bundle
+    ctx.lines = bundle.dmesg_text.splitlines()
+
+    # [2/5] triage prefilter (core)
     if args.no_triage:
-        blocks = [Block(start=1, end=len(lines), names=["whole-log"])]
-        blocks_text = bundle.dmesg_text
+        ctx.blocks = [Block(start=1, end=len(ctx.lines), names=["whole-log"])]
+        ctx.blocks_text = bundle.dmesg_text
     else:
-        blocks = find_blocks(lines)
-        blocks_text = render_blocks(lines, blocks)
-    if not blocks_text.strip():
+        ctx.blocks = find_blocks(ctx.lines)
+        ctx.blocks_text = render_blocks(ctx.lines, ctx.blocks)
+    if not ctx.blocks_text.strip():
         print("error: log is empty or no suspicious segments were selected "
               "(pass --no-triage to analyze the full log)", file=sys.stderr)
         return 2
-    log("[2/5]", f"prefilter: {len(blocks)} segments / {len(lines)} lines")
+    log("[2/5]", f"prefilter: {len(ctx.blocks)} segments / {len(ctx.lines)} lines")
 
-    scan_text = ""
-    scan_lines: list[str] = []
-    if executor is not None:
-        no_signal = len(blocks) == 1 and blocks[0].names == ["whole-log"]
-        if args.scan or (no_signal and not args.no_scan):
-            log("[3/5]", "proactive system scan (non-kernel-log problems)")
-            scan_evs = run_system_scan(executor)
-        else:
-            scan_evs = []
-        if args.vmcore:
-            log("[3/5]", f"vmcore analysis with crash ({args.vmcore})")
-            scan_evs = scan_evs + [analyze_vmcore(
-                executor, args.vmcore, args.vmlinux or os.environ.get("DMESG_AGENT_VMLINUX"))]
-        if args.live_probe:
-            log("[3/5]", "live kernel probe via drgn")
-            scan_evs = scan_evs + run_live_probe(executor)
-        if args.cross_boot:
-            log("[3/5]", f"cross-boot correlation: previous {args.cross_boot} boot(s)")
-            scan_evs = scan_evs + run_cross_boot(executor, args.cross_boot)
-        if scan_evs:
-            scan_text = render_scan(scan_evs)
-            for ev in scan_evs:
-                scan_lines.extend(ev.output.splitlines())
-
-    prefetch_text = ""
-    if executor is not None and not args.no_prefetch:
-        sig_names = {n for b in blocks for n in b.names}
-        evs = run_prefetch(executor, sig_names)
-        prefetch_text = render_prefetch(evs)
-        log("[3/5]", f"prefetch: {sum(1 for e in evs if e.status == 'ok')} items")
-    else:
-        log("[3/5]", "skipping prefetch" + (" (no executor with --file)" if args.file else ""))
-
-    changes_text = ""
-    if executor is not None:
-        first_ts = parse_first_error_time(lines, blocks)
-        changes_evs = run_system_changes(executor, first_ts)
-        changes_text = render_scan(changes_evs)
-        for ev in changes_evs:
-            scan_lines.extend(ev.output.splitlines())
-        ok_count = sum(1 for e in changes_evs if e.status == "ok")
-        log("[3/5]", f"system-change correlation: {ok_count} item(s)"
-                     + (f" around {first_ts:%Y-%m-%d %H:%M}" if first_ts else
-                        " (no absolute timestamps in the log)"))
-        if changes_text:
-            prefetch_text = (
-                prefetch_text + "\n\n[System changes around the first fault — whitelisted evidence]\n"
-                + changes_text).strip()
-
-    source_text = ""
-    srcmap_version = ""
-    src_path = args.kernel_src or os.environ.get("DMESG_AGENT_KERNEL_SRC")
-    if src_path and not args.no_srcmap:
-        sm = SrcMap(src_path)
-        if not sm.available:
-            print(f"warning: kernel source tree unavailable ({src_path}); skipping source correlation",
+    # [3/5] collect + context plugins
+    ctx.host = _resolve_host(args, bundle)
+    try:
+        for collect in registry.get("collect"):
+            try:
+                collect(ctx)
+            except CollectError:
+                raise
+            except Exception as e:
+                _warn_plugin(collect, "collect", e)
+        if ctx.offline_sources and registry.named("collect", "offline_sources") is None:
+            print("warning: the offline package attached extra files but the "
+                  "offline-sources plugin is not installed; ignoring them",
                   file=sys.stderr)
-        else:
-            syms = extract_symbols(lines)
-            if not syms:
-                log("[3.5]", "no Call Trace symbols in the log; skipping source correlation")
-            if syms:
-                srcmap_version = sm.version
-                log("[3.5]", f"source correlation: {len(syms)} trace functions @ {src_path}")
-                try:
-                    sm.build_index(progress=lambda m: print(f"  {m}", file=sys.stderr))
-                    source_text, matched = sm.render(
-                        syms, running_kernel=bundle.kernel_version)
-                    log("[3.5]", f"correlated {len(matched)}/{len(syms)} functions")
-                except Exception as e:
-                    print(f"warning: source correlation failed ({e}); continuing without sources",
-                          file=sys.stderr)
-
-    facts = extract_facts(lines, [prefetch_text, scan_text])
-    facts_text = render_facts(facts)
-    if facts:
-        log("[4/5]", f"deterministic facts: {len(facts)}")
+        for flag, value, kind, name in (
+            ("--issue", args.issue, "context", "issue"),
+            ("--scan", args.scan, "collect", "system_scan"),
+            ("--vmcore", args.vmcore, "collect", "vmcore"),
+            ("--live-probe", args.live_probe, "collect", "live_probe"),
+            ("--cross-boot", args.cross_boot, "collect", "cross_boot"),
+            ("--kernel-src", args.kernel_src, "collect", "srcmap"),
+        ):
+            if value and registry.named(kind, name) is None:
+                print(f"warning: {flag} was given but the {name} plugin is not "
+                      f"installed; ignoring it", file=sys.stderr)
+        for context in registry.get("context"):
+            try:
+                context(ctx)
+            except CollectError:
+                raise
+            except Exception as e:
+                _warn_plugin(context, "context", e)
+    except CollectError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
     cfg = load_config(base_url=args.base_url, model=args.model, api_key=args.api_key,
                       provider=args.provider)
     if args.max_tokens:
         cfg.max_tokens = args.max_tokens
-    host = _resolve_host(args, bundle)
-    history_text = ""
-    known_cases: list[dict] = []
-    known_case = None
-    if not args.no_knowledge:
-        try:
-            history_text = render_history(
-                host_history(resolve_db_path(args.knowledge_db), host))
-        except KnowledgeError as e:
-            print(f"warning: case history unavailable ({e})", file=sys.stderr)
-        if history_text:
-            log("[4/5]", f"prior case history: {history_text.count(chr(10)) + 1} line(s)")
-        try:
-            block_lines: list[str] = []
-            for b in blocks:
-                block_lines.extend(lines[b.start - 1:b.end])
-            tokens = log_fingerprint(block_lines).tokens
-            known_cases = find_confirmed_cases(
-                resolve_db_path(args.knowledge_db), host, tokens, log_lines=lines)
-        except KnowledgeError as e:
-            print(f"warning: confirmed-case lookup failed ({e})", file=sys.stderr)
-        if known_cases:
-            known_case = known_cases[0]
-            parts = ["[Known confirmed cases on this host — prior verdicts, not evidence]"]
-            for kc in known_cases[:5]:
-                parts.append(
-                    f"### case #{kc['case_id']} (match: {kc['tier']}, "
-                    f"score {kc['score']})\n"
-                    f"Title: {kc['title']}\n"
-                    f"Subsystem: {kc['subsystem'] or '?'}\n"
-                    f"Root cause: {str(kc['root_cause'])[:500]}\n"
-                    f"Previously confirmed x{kc['occurrences']} (last {kc['last_seen']}).")
-            parts.append("Judge only the delta versus these known cases: are they the same "
-                         "issues, and what changed? Report any NEW issue not covered here.")
-            known_text = "\n".join(parts)
-            history_text = (history_text + "\n" + known_text).strip()
-            ids = ", ".join(f"#{kc['case_id']}" for kc in known_cases)
-            log("[4/5]", f"fast path: {len(known_cases)} confirmed case(s) matched "
-                         f"({ids}); deep collection will be skipped")
-    run_uuid = new_run_uuid()
-    client = RecordingClient(Client(cfg))
-    deep_used = False
-    result = None
-    answer = ""
-    llm_error: str | None = None
+    ctx.cfg = cfg
+    ctx.run_uuid = new_run_uuid()
+    ctx.client = RecordingClient(Client(cfg))
+    ctx.make_stream = _make_stream_factory()
+
+    # [4/5] three-tier analysis; [5/5] optional deep verification plugin
     try:
         log("[4/5]", f"LLM three-tier analysis ({cfg.base_url})")
-        corpus = lines + scan_lines
-        make_stream = _make_stream_factory()
-        result, answer = run_analysis(client, bundle, blocks_text, prefetch_text, corpus,
-                                      source_text=source_text, scan_text=scan_text,
-                                      make_stream=make_stream, history_text=history_text,
-                                      facts_text=facts_text)
-        if known_cases and result is not None and result.get("inconclusive_concerns"):
-            ids = ", ".join(f"#{kc['case_id']}" for kc in known_cases)
+        ctx.corpus = ctx.lines + ctx.scan_lines
+        ctx.result, ctx.answer = run_analysis(
+            ctx.client, bundle, ctx.blocks_text, ctx.prefetch_text, ctx.corpus,
+            source_text=ctx.source_text, scan_text=ctx.scan_text,
+            make_stream=ctx.make_stream, history_text=ctx.history_text,
+            facts_text=ctx.facts_text, issue_text=ctx.issue_text)
+        if ctx.known_cases and ctx.result is not None \
+                and ctx.result.get("inconclusive_concerns"):
+            ids = ", ".join(f"#{kc['case_id']}" for kc in ctx.known_cases)
             log("[5/5]", f"fast path: skipping deep verification (confirmed {ids})")
-        if result is not None and not args.no_deep and executor is not None \
-                and result.get("inconclusive_concerns") and not known_cases:
-            n = len(result["inconclusive_concerns"])
-            log("[5/5]", f"deep-verifying {min(n, args.max_verify)}/{n} open questions "
-                         "(a password prompt may appear for root-level collection)")
-            result, corpus = deep_dive(client, executor, result, lines, bundle,
-                                       max_concerns=args.max_verify, extra_corpus=scan_lines,
-                                       make_stream=make_stream,
-                                       max_rounds=args.deep_rounds)
-            deep_used = True
+        deep_hooks = registry.get("deep")
+        if deep_hooks:
+            try:
+                deep_hooks[0](ctx)
+            except LLMError:
+                raise
+            except Exception as e:
+                _warn_plugin(deep_hooks[0], "deep", e)
+        elif ctx.result is not None and not args.no_deep and ctx.executor is not None \
+                and ctx.result.get("inconclusive_concerns") and not ctx.known_cases:
+            log("[5/5]", "deep-verification plugin not installed; "
+                         "leaving open questions unresolved")
     except LLMError as e:
-        llm_error = str(e)
+        ctx.llm_error = str(e)
         print(f"error: {e}", file=sys.stderr)
     finally:
-        if executor is not None:
-            executor.close()
+        if ctx.executor is not None:
+            ctx.executor.close()
 
-    if isinstance(result, dict):
-        result["facts"] = facts
-        summary = verify_result(result, corpus)
-        if not args.no_knowledge:
-            try:
-                kb = record_run(resolve_db_path(args.knowledge_db), host, result,
-                                kernel=bundle.kernel_version, source=bundle.source,
-                                fuzzy_threshold=args.kmatch_threshold,
-                                verified=(summary.passed, summary.total),
-                                run_uuid=run_uuid)
-                result["knowledge"] = kb
-                if known_cases:
-                    kb["fast_path"] = known_case
-                    kb["fast_path_cases"] = [
-                        {"case_id": kc["case_id"], "title": kc["title"]}
-                        for kc in known_cases]
-                log("[6/6]", f"case library (shadow): {len(kb['matches'])} finding(s), "
-                             f"{kb['new_cases']} new, {kb['recurrences']} recurrence(s)")
-            except KnowledgeError as e:
-                print(f"warning: case library not updated ({e})", file=sys.stderr)
+    # evidence verification is core and mandatory; then optional post plugins
+    if isinstance(ctx.result, dict):
+        if ctx.facts:
+            ctx.result["facts"] = ctx.facts
+        ctx.summary = verify_result(ctx.result, ctx.corpus)
     else:
-        summary = VerifySummary()
+        ctx.summary = VerifySummary()
+    for post in registry.get("post"):
+        try:
+            post(ctx)
+        except Exception as e:
+            _warn_plugin(post, "post", e)
 
-    try:
-        archive_path = write_run_archive(build_archive(
-            run_uuid=run_uuid, host=host, bundle=bundle, blocks=blocks,
-            blocks_text=blocks_text, prefetch_text=prefetch_text, scan_text=scan_text,
-            changes_text=changes_text, source_text=source_text, facts_text=facts_text,
-            exchanges=client.exchanges, result=result,
-            verify={"total": summary.total, "passed": summary.passed,
-                    "line_mismatch": summary.line_mismatch},
-            argv=argv, error=llm_error, base_url=cfg.base_url,
-            model=client.last_model or cfg.model or ""))
-        log("[6/6]", f"run archive: {archive_path}")
-    except OSError as e:
-        print(f"warning: run archive not written ({e})", file=sys.stderr)
-
-    if llm_error is not None:
+    if ctx.llm_error is not None:
         return 3
-    if getattr(client, "last_finish_reason", None) == "length":
+    if getattr(ctx.client, "last_finish_reason", None) == "length":
         print("warning: model output hit the max_tokens ceiling and was truncated "
               "(results may be incomplete)", file=sys.stderr)
 
     use_color = args.color == "always" or (
         args.color == "auto" and sys.stdout.isatty() and not os.environ.get("NO_COLOR"))
     if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2) if result is not None else
-              json.dumps({"error": "model returned no JSON", "raw": answer}, ensure_ascii=False, indent=2))
+        print(json.dumps(ctx.result, ensure_ascii=False, indent=2)
+              if ctx.result is not None else
+              json.dumps({"error": "model returned no JSON", "raw": ctx.answer},
+                         ensure_ascii=False, indent=2))
     elif args.brief:
-        text = render_brief(result, bundle, summary)
+        brief = registry.named("render", "brief")
+        if brief is None:
+            print("warning: brief renderer plugin not installed; printing the full report",
+                  file=sys.stderr)
+            text = _render_markdown(ctx)
+        else:
+            try:
+                text = brief(ctx)
+            except Exception as e:
+                _warn_plugin(brief, "render", e)
+                print("warning: brief renderer failed; printing the full report",
+                      file=sys.stderr)
+                text = _render_markdown(ctx)
         print(apply_ansi(text) if use_color else text)
     elif args.output:
-        report = render(result, bundle, summary, blocks, raw_text=answer,
-                        prefetch_used=bool(prefetch_text), deep_used=deep_used,
-                        source_text=source_text, srcmap_version=srcmap_version,
-                        scan_used=bool(scan_text), scan_text=scan_text,
-                        changes_text=changes_text)
+        report = _render_markdown(ctx)
         with open(args.output, "w", encoding="utf-8") as f:
             f.write(report + "\n")
         print(f"report written to {args.output}", file=sys.stderr)
     elif not args.html:
-        report = render(result, bundle, summary, blocks, raw_text=answer,
-                        prefetch_used=bool(prefetch_text), deep_used=deep_used,
-                        source_text=source_text, srcmap_version=srcmap_version,
-                        scan_used=bool(scan_text), scan_text=scan_text,
-                        changes_text=changes_text)
+        report = _render_markdown(ctx)
         print(apply_ansi(report) if use_color else report)
 
     if args.html:
-        html = render_html(result, bundle, summary, blocks, lines, raw_text=answer,
-                           prefetch_used=bool(prefetch_text), deep_used=deep_used,
-                           scan_used=bool(scan_text), scan_text=scan_text,
-                           changes_text=changes_text, source_text=source_text,
-                           srcmap_version=srcmap_version)
-        Path(args.html).write_text(html + "\n", encoding="utf-8")
-        print(f"HTML report written to {args.html}", file=sys.stderr)
-    return 0 if result is not None else 4
+        html_hook = registry.named("render", "html")
+        if html_hook is None:
+            print("warning: HTML renderer plugin not installed; --html ignored",
+                  file=sys.stderr)
+        else:
+            try:
+                path = html_hook(ctx)
+            except Exception as e:
+                _warn_plugin(html_hook, "render", e)
+                print("warning: HTML renderer failed; --html skipped", file=sys.stderr)
+            else:
+                print(f"HTML report written to {path}", file=sys.stderr)
+    return 0 if ctx.result is not None else 4
 
 
 if __name__ == "__main__":

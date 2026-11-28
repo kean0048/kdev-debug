@@ -35,6 +35,14 @@ python3 -m venv .venv
 dmesg-agent --file dmesg.txt --kernel 6.12.11+ --distro "Debian 13" -o report.md
 sudo dmesg -T --color=never | dmesg-agent --file -
 
+# 1b) Offline diagnostic packages (auto-detected by name + content)
+dmesg-agent --file sosreport-ubuntu-*.tar.xz -o report.md
+dmesg-agent --file nvidia-bug-report.log.gz --host-id "$(cat /etc/machine-id)" -o report.md
+dmesg-agent --file journal-export.json        # journalctl -o json / -o export
+
+# 1c) Attach the reporter's problem description (Jira body etc.) as context
+dmesg-agent --file sosreport-*.tar.xz --issue jira-description.txt -o report.md
+
 # 2) Local machine (full pipeline: prefetch + deep verification; reading dmesg needs root)
 sudo .venv/bin/dmesg-agent
 dmesg-agent --boot previous
@@ -44,6 +52,8 @@ dmesg-agent --ssh user@10.0.0.5 --key ~/.ssh/id_ed25519
 dmesg-agent --ssh user@10.0.0.5 --ssh-password   # password login: prompted (hidden),
                                                  # or set DMESG_AGENT_SSH_PASSWORD
 ```
+
+Offline packages are unpacked in memory (nothing is extracted to disk) and reduced to a main kernel log (fed to triage) plus extra sources that join the prompt and evidence corpus. sosreport also surfaces the command outputs a live run would collect — `smartctl`, `lsblk`, `ps`, `free`, `df`, `mount`, `systemctl --failed`, `lspci`, `dmidecode`, `ethtool`, `ip addr`, `sysctl`… — so an offline diagnosis still gets prefetch/scan/deep-equivalent data, just read from the tarball instead of run on the host; it also yields kernel version, distro and hostname from `uname`/`os-release`/`hostname`. `journalctl -o json`/`-o export` dumps are rebuilt into plain text with the hostname recovered for the case library. `--issue PATH` injects the reporter's description as context only (never evidence, never instructions).
 
 When deep verification hits a collection command that needs root: it asks for the password via hidden terminal input; with no terminal but a desktop session available it falls back to a `zenity`/`kdialog` password dialog; `--askpass none` disables this (those commands are skipped). The password is kept in process memory only.
 
@@ -315,6 +325,21 @@ default.
 - **feedback retry**: when the JSON is invalid or an evidence reference cannot be found, the precise violation list is fed back to the model for one retry (with a budget; no infinite loop)
 - **anti-hallucination verify**: every evidence quote is compared verbatim (after normalization) against the corpus (original log + collected output); line-number offsets are auto-corrected and the pass rate is written into the report header
 - when the model returns no valid JSON: strip fences, slice braces, repair truncation — if all fail, present the raw output (exit code 4)
+
+## Plugin architecture
+
+The core is a dispatcher; features are plugins under `dmesg_agent/plugins/`
+(six hook kinds: source, collect, context, deep, post, render). Removing a
+plugin file — or disabling one — removes that enhancement without breaking the
+core report; evidence verification and the command whitelist stay in the core.
+
+```bash
+dmesg-agent plugins list                                   # what is loaded, where
+DMESG_AGENT_DISABLE_PLUGINS=collect_facts dmesg-agent ...  # one-off disable (module names)
+```
+
+`docs/PLUGINS.md` has the hook contracts, the degradation matrix and the
+step-by-step "add a plugin without touching the core" guide.
 
 ## Development
 
